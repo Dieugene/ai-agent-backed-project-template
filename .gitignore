@@ -1,0 +1,18 @@
+# IDE
+.idea/
+.vscode/
+
+# Temporary/old files
+.old/
+*.bak
+
+# Data and logs (project-specific)
+03_data/
+04_logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+*.orig
