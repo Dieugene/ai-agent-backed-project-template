@@ -13,6 +13,9 @@ project/
 ├── .claude/                  # Настройки Claude Code
 │   ├── skills/              # Skills для динамической загрузки
 │   └── commands/            # Слеш-команды
+├── .worktrees/              # Git worktrees (параллельная работа)
+│   ├── experiment/          # Worktree на ветке experiment
+│   └── task-002/            # Worktree на ветке task-002
 ├── 00_docs/                 # Документация
 │   ├── architecture/        # Архитектурные решения
 │   ├── standards/           # Стандарты
@@ -126,3 +129,11 @@ project/
 ```
 
 Каждая новая ревизия - новая секция с инкрементным номером.
+
+## Git Worktrees
+
+**Назначение:** Параллельная работа над независимыми задачами в одном репозитории.
+
+**Правило:** Имя директории worktree = имя ветки (например `.worktrees/experiment/` на ветке `experiment`).
+
+**Управление:** Architect через `.claude/skills/worktree/SKILL.md`

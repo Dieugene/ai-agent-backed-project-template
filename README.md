@@ -162,6 +162,26 @@ Architect создаст `task_brief_01.md` и даст промпт для Anal
 3. Агент сгенерирует промпт для преемника
 4. Скопируйте промпт и запустите в **новой сессии**
 
+## Параллельная работа (Worktree)
+
+Для параллельной работы над независимыми задачами используйте git worktree:
+
+```
+# Architect создает worktree
+Создай worktree experiment на ветке experiment
+```
+
+Worktree создает отдельную рабочую директорию (например `.worktrees/experiment/` на ветке `experiment`). В ней работа идет как обычно: Analyst → Developer → Reviewer.
+
+**Когда использовать:**
+- Параллельная работа (одна задача на review, начинаем другую)
+- Проверка гипотез (тестирование разных подходов)
+- Срочные правки (hotfix пока feature в разработке)
+
+**После завершения:** Architect мержит ветку в main и удаляет worktree.
+
+**Подробности:** `.claude/skills/worktree/SKILL.md`
+
 ## Структура файлов проекта
 
 ```
@@ -176,7 +196,11 @@ Architect создаст `task_brief_01.md` и даст промпт для Anal
 │   └── handoff-role.md
 └── skills/            # Skills для агентов
     ├── handoff/
-    └── project-review/
+    ├── project-review/
+    └── worktree/
+
+.worktrees/            # Git worktrees (параллельная работа с ветками)
+└── branch-name/       # Worktree на ветке branch-name
 
 00_docs/
 ├── architecture/      # Архитектурные документы
@@ -202,8 +226,11 @@ Architect создаст `task_brief_01.md` и даст промпт для Anal
     └── _questions_architect.md # Вопросы для эскалации (опционально)
 
 02_src/               # Исходный код
-03_data/              # Данные (в .gitignore)
-04_logs/              # Логи (в .gitignore)
+
+03_data/              # Данные - исходные и результаты работы алгоритмов
+└── NN_название/      # Папки нумеруются по конвенции проекта
+
+04_logs/              # Логи работы алгоритмов для отладки и мониторинга
 
 AGENTS.md             # Специфика проекта для агентов
 README.md             # Этот файл (для людей)
