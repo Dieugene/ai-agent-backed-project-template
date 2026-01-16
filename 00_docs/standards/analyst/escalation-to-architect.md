@@ -67,10 +67,10 @@
 ### Шаг 2: Сформируй промпт для Architect
 
 ```
-Ты — агент Architect (см. .agents/roles/architect.md).
+Ты — агент Architect (см. .agents/architect.md).
 
 Прочитай:
-- .agents/roles/architect.md
+- .agents/architect.md
 - 01_tasks/NNN_название/_questions_architect.md
 - 00_docs/architecture/overview.md
 - [другие релевантные ADR если нужно]

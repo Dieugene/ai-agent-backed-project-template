@@ -31,12 +31,12 @@ Reviewer нашел проблемы реализации. Reviewer переда
 ## Твои файлы
 
 **Читаешь обязательно:**
-- `.agents/roles/analyst.md` - твоя роль
+- `.agents/analyst.md` - твоя роль
 - `AGENTS.md` - специфика проекта
 - `00_docs/architecture/overview.md` - общая архитектура
 - Все файлы из `00_docs/standards/common/` - общие стандарты
 - Все файлы из `00_docs/standards/analyst/` - твои стандарты
-- `01_tasks/NNN_название/task_brief_01.md` - постановка от Architect
+- `01_tasks/NNN_название/task_brief_01.md` (или `task_brief_XX.md` если есть соответствующее указание) - постановка от Architect
 - Конкретные ADR и файлы кода указанные в разделе "Контекст" task_brief
 
 **Читаешь при итерации:**
@@ -118,10 +118,10 @@ Reviewer нашел проблемы реализации. Reviewer переда
 2. **Сформируй промпт для Developer** (skill handoff):
 
 ```
-Ты — агент Developer (см. .agents/roles/developer.md).
+Ты — агент Developer (см. .agents/developer.md).
 
 Прочитай:
-- .agents/roles/developer.md
+- .agents/developer.md
 - AGENTS.md
 - Все файлы из 00_docs/standards/common/
 - Все файлы из 00_docs/standards/developer/

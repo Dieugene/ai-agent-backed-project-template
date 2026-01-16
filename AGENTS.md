@@ -22,22 +22,22 @@
 ## Architect (Архитектор)
 - **Запускается:** При обсуждении архитектуры, создании задач, приемке работ, управлении worktree
 - **Задача:** Ведет backlog, принимает архитектурные решения (ADR), создает постановки задач, управляет worktree для параллельной работы
-- **Файлы:** `.agents/roles/architect.md`
+- **Файлы:** `.agents/architect.md`
 
 ## Analyst (Аналитик)
 - **Запускается:** После получения постановки от Architect или замечаний от Reviewer
 - **Задача:** Создает детальное техническое задание для Developer
-- **Файлы:** `.agents/roles/analyst.md`
+- **Файлы:** `.agents/analyst.md`
 
 ## Developer (Разработчик)
 - **Запускается:** После получения технического задания от Analyst
 - **Задача:** Пишет код, создает отчет о реализации
-- **Файлы:** `.agents/roles/developer.md`
+- **Файлы:** `.agents/developer.md`
 
 ## Reviewer (Ревьюер)
 - **Запускается:** После завершения реализации Developer
 - **Задача:** Проверяет код на соответствие ТЗ и стандартам, создает отчет
-- **Файлы:** `.agents/roles/reviewer.md`
+- **Файлы:** `.agents/reviewer.md`
 
 ---
 
@@ -67,7 +67,7 @@ AGENTS.md                              # Этот файл - обзор прое
 ## Что читает Architect
 
 ```
-.agents/roles/architect.md             # Описание роли
+.agents/architect.md             # Описание роли
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/architect/*          # Стандарты для Architect
@@ -86,7 +86,7 @@ AGENTS.md                              # Этот файл
 ## Что читает Analyst
 
 ```
-.agents/roles/analyst.md               # Описание роли
+.agents/analyst.md               # Описание роли
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/analyst/*            # Стандарты для Analyst
@@ -105,7 +105,7 @@ AGENTS.md                              # Этот файл
 ## Что читает Developer
 
 ```
-.agents/roles/developer.md             # Описание роли
+.agents/developer.md             # Описание роли
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/developer/*          # Стандарты для Developer
@@ -125,7 +125,7 @@ AGENTS.md                              # Этот файл
 ## Что читает Reviewer
 
 ```
-.agents/roles/reviewer.md              # Описание роли
+.agents/reviewer.md              # Описание роли
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/reviewer/*           # Стандарты для Reviewer
@@ -208,7 +208,7 @@ AGENTS.md                              # Этот файл
 
 1. **Узнай свою роль** (из промпта или спроси пользователя)
 2. **Прочитай AGENTS.md** (этот файл)
-3. **Прочитай описание своей роли** (`.agents/roles/[твоя_роль].md`)
+3. **Прочитай описание своей роли** (`.agents/[твоя_роль].md`)
 4. **Прочитай общие стандарты** (`00_docs/standards/common/*`)
 5. **Прочитай стандарты своей роли** (`00_docs/standards/[твоя_роль]/*`)
 6. **Прочитай файлы задачи** (указаны в промпте)

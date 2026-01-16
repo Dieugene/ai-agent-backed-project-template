@@ -30,7 +30,7 @@ Reviewer нашел проблемы. Analyst обновил план и пер�
 ## Твои файлы
 
 **Читаешь обязательно:**
-- `.agents/roles/developer.md` - твоя роль
+- `.agents/developer.md` - твоя роль
 - `AGENTS.md` - специфика проекта
 - Все файлы из `00_docs/standards/common/` - общие стандарты
 - Все файлы из `00_docs/standards/developer/` - твои стандарты
@@ -126,13 +126,13 @@ Reviewer нашел проблемы. Analyst обновил план и пер�
 2. **Сформируй промпт для Reviewer** (skill handoff):
 
 ```
-Ты — агент Reviewer (см. .agents/roles/reviewer.md).
+Ты — агент Reviewer (см. .agents/reviewer.md).
 
 Прочитай:
-- .agents/roles/reviewer.md
+- .agents/reviewer.md
 - Все файлы из 00_docs/standards/common/
 - Все файлы из 00_docs/standards/reviewer/
-- 01_tasks/NNN_название/task_brief_01.md
+- 01_tasks/NNN_название/task_brief_01.md (или `task_brief_XX.md` если есть соответствующее указание)
 - 01_tasks/NNN_название/analysis_NN.md
 - 01_tasks/NNN_название/implementation_NN.md
 

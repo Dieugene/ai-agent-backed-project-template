@@ -13,10 +13,10 @@ description: >
 ## Формат промпта
 
 ```
-Ты — агент [Role] (см. .agents/roles/[role].md).
+Ты — агент [Role] (см. .agents/[role].md).
 
 Прочитай:
-- .agents/roles/[role].md
+- .agents/[role].md
 - [базовый файл 1]
 - [базовый файл 2]
 - [файл с задачей]
@@ -38,10 +38,10 @@ description: >
 ### Передача Analyst для анализа
 
 ```
-Ты — агент Analyst (см. .agents/roles/analyst.md).
+Ты — агент Analyst (см. .agents/analyst.md).
 
 Прочитай:
-- .agents/roles/analyst.md
+- .agents/analyst.md
 - AGENTS.md
 - 00_docs/architecture/overview.md
 - 00_docs/standards.md
@@ -55,10 +55,10 @@ description: >
 ### Передача Analyst для повторной итерации
 
 ```
-Ты — агент Analyst (см. .agents/roles/analyst.md).
+Ты — агент Analyst (см. .agents/analyst.md).
 
 Прочитай:
-- .agents/roles/analyst.md
+- .agents/analyst.md
 - 01_tasks/003_feature/task_brief_02.md
 - 01_tasks/003_feature/review.md
 - 01_tasks/003_feature/analysis_01.md

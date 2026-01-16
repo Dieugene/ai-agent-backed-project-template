@@ -9,10 +9,10 @@
 Начните с агента Architect для обсуждения архитектуры:
 
 ```
-Ты — агент Architect (см. .agents/roles/architect.md).
+Ты — агент Architect (см. .agents/architect.md).
 
 Прочитай:
-- .agents/roles/architect.md
+- .agents/architect.md
 - AGENTS.md
 - Все файлы из 00_docs/standards/common/
 - Все файлы из 00_docs/standards/architect/
@@ -58,7 +58,7 @@ Architect создаст `task_brief_01.md` и даст промпт для Anal
 - Создает ADR при архитектурных решениях
 - Принимает выполненную работу
 
-**Файлы:** `.agents/roles/architect.md`
+**Файлы:** `.agents/architect.md`
 
 ### Analyst (Аналитик)
 **Когда запускать:**
@@ -70,7 +70,7 @@ Architect создаст `task_brief_01.md` и даст промпт для Anal
 - Описывает КАК реализовать (компоненты, структуры, алгоритмы)
 - Эскалирует архитектурные вопросы к Architect
 
-**Файлы:** `.agents/roles/analyst.md`
+**Файлы:** `.agents/analyst.md`
 
 ### Developer (Разработчик)
 **Когда запускать:**
@@ -81,7 +81,7 @@ Architect создаст `task_brief_01.md` и даст промпт для Anal
 - Создает отчет о реализации `implementation_NN.md`
 - Эскалирует проблемы к Analyst или Architect
 
-**Файлы:** `.agents/roles/developer.md`
+**Файлы:** `.agents/developer.md`
 
 ### Reviewer (Ревьюер)
 **Когда запускать:**
@@ -92,7 +92,7 @@ Architect создаст `task_brief_01.md` и даст промпт для Anal
 - Создает отчет о проверке `review_NN.md`
 - Решает: принять, вернуть Analyst, или эскалировать к Architect
 
-**Файлы:** `.agents/roles/reviewer.md`
+**Файлы:** `.agents/reviewer.md`
 
 ## Типичный workflow задачи
 
@@ -185,7 +185,7 @@ Worktree создает отдельную рабочую директорию (
 ## Структура файлов проекта
 
 ```
-.agents/roles/          # Описания ролей агентов
+.agents/                # Описания ролей агентов
 ├── architect.md
 ├── analyst.md
 ├── developer.md
@@ -252,10 +252,10 @@ README.md             # Этот файл (для людей)
 
 ### Начать новый проект
 ```
-Ты — агент Architect (см. .agents/roles/architect.md).
+Ты — агент Architect (см. .agents/architect.md).
 
 Прочитай:
-- .agents/roles/architect.md
+- .agents/architect.md
 - AGENTS.md
 - Все файлы из 00_docs/standards/common/
 - Все файлы из 00_docs/standards/architect/
@@ -328,6 +328,6 @@ A: Обратитесь к Architect, он создаст/обновит ADR и 
 ## Дополнительная информация
 
 - Стандарты проекта: `00_docs/standards/`
-- Описания ролей: `.agents/roles/`
+- Описания ролей: `.agents/`
 - Архитектура: `00_docs/architecture/overview.md`
 - Backlog: `00_docs/backlog.md`

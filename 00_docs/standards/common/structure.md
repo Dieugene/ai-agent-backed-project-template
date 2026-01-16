@@ -5,11 +5,10 @@
 ```
 project/
 ├── .agents/                  # Описания ролей агентов
-│   └── roles/
-│       ├── architect.md
-│       ├── analyst.md
-│       ├── developer.md
-│       └── reviewer.md
+│   ├── architect.md
+│   ├── analyst.md
+│   ├── developer.md
+│   └── reviewer.md
 ├── .claude/                  # Настройки Claude Code
 │   ├── skills/              # Skills для динамической загрузки
 │   └── commands/            # Слеш-команды

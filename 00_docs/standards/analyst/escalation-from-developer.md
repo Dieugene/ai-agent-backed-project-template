@@ -68,10 +68,10 @@
 ### 6. Сформируй промпт для продолжения
 
 ```
-Ты — агент Developer (см. .agents/roles/developer.md).
+Ты — агент Developer (см. .agents/developer.md).
 
 Прочитай:
-- .agents/roles/developer.md
+- .agents/developer.md
 - 01_tasks/NNN/_questions_analyst.md
 - 01_tasks/NNN/analysis_02.md
 - [другие релевантные файлы]

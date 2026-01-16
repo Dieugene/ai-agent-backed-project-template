@@ -55,10 +55,10 @@
 ### Шаг 2: Сформируй промпт для Analyst
 
 ```
-Ты — агент Analyst (см. .agents/roles/analyst.md).
+Ты — агент Analyst (см. .agents/analyst.md).
 
 Прочитай:
-- .agents/roles/analyst.md
+- .agents/analyst.md
 - 01_tasks/NNN/_questions_analyst.md
 - 01_tasks/NNN/analysis_01.md
 - 01_tasks/NNN/task_brief_01.md
@@ -123,10 +123,10 @@
 ### Шаг 2: Сформируй промпт для Architect
 
 ```
-Ты — агент Architect (см. .agents/roles/architect.md).
+Ты — агент Architect (см. .agents/architect.md).
 
 Прочитай:
-- .agents/roles/architect.md
+- .agents/architect.md
 - 01_tasks/NNN/_questions_architect.md
 - 00_docs/architecture/overview.md
 - 00_docs/architecture/decision_NNN_relevant.md

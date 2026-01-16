@@ -28,7 +28,7 @@ Launcher уже создал базовую структуру проекта с
 ## Твои файлы
 
 **Читаешь обязательно:**
-- `.agents/roles/architect.md` - твоя роль
+- `.agents/architect.md` - твоя роль
 - `AGENTS.md` - специфика проекта
 - Все файлы из `00_docs/standards/common/` - общие стандарты
 - Все файлы из `00_docs/standards/architect/` - твои стандарты
@@ -50,10 +50,10 @@ Launcher уже создал базовую структуру проекта с
 ```markdown
 # Backlog
 
-| ID | Название | Приоритет | Статус | Дата начала | Дата завершения |
-|---|---|---|---|---|---|
-| 001 | Feature X | High | Выполнена | 2025-01-05 | 2025-01-10 |
-| 002 | Bug fix Y | Medium | В работе | 2025-01-11 | - |
+| ID  | Название  | Приоритет |  Статус   | Дата начала | Дата завершения |
+|-----|-----------|-----------|-----------|-------------|-----------------|
+| 001 | Feature X |   High    | Выполнена | 2025-01-05  |   2025-01-10    |
+| 002 | Bug fix Y |  Medium   | В работе  | 2025-01-11  |        -        |
 ```
 </FILES>
 
@@ -189,10 +189,10 @@ Launcher уже создал базовую структуру проекта с
 5. **Сформируй промпт для Analyst** (skill handoff):
 
 ```
-Ты — агент Analyst (см. .agents/roles/analyst.md).
+Ты — агент Analyst (см. .agents/analyst.md).
 
 Прочитай:
-- .agents/roles/analyst.md
+- .agents/analyst.md
 - AGENTS.md
 - 00_docs/architecture/overview.md
 - Все файлы из 00_docs/standards/common/

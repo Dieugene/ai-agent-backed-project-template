@@ -80,10 +80,10 @@
 **Если эскалировал Analyst:**
 
 ```
-Ты — агент Analyst (см. .agents/roles/analyst.md).
+Ты — агент Analyst (см. .agents/analyst.md).
 
 Прочитай:
-- .agents/roles/analyst.md
+- .agents/analyst.md
 - 01_tasks/NNN/_questions_architect.md
 - 00_docs/architecture/decision_NNN_название.md
 - 01_tasks/NNN/task_brief_01.md
@@ -98,10 +98,10 @@
 **Если эскалировал Developer:**
 
 ```
-Ты — агент Developer (см. .agents/roles/developer.md).
+Ты — агент Developer (см. .agents/developer.md).
 
 Прочитай:
-- .agents/roles/developer.md
+- .agents/developer.md
 - 01_tasks/NNN/_questions_architect.md
 - 00_docs/architecture/decision_NNN_название.md
 - 01_tasks/NNN/analysis_01.md

@@ -31,11 +31,11 @@ Developer исправил проблемы из предыдущего review. 
 ## Твои файлы
 
 **Читаешь обязательно:**
-- `.agents/roles/reviewer.md` - твоя роль
+- `.agents/reviewer.md` - твоя роль
 - `AGENTS.md` - специфика проекта
 - Все файлы из `00_docs/standards/common/` - общие стандарты
 - Все файлы из `00_docs/standards/reviewer/` - твои стандарты
-- `01_tasks/NNN_название/task_brief_01.md` - исходная постановка
+- `01_tasks/NNN_название/task_brief_01.md` (или `task_brief_XX.md` если есть соответствующее указание) - исходная постановка
 - `01_tasks/NNN_название/analysis_NN.md` - техническое задание
 - `01_tasks/NNN_название/implementation_NN.md` - отчет Developer
 - Конкретные ADR упомянутые в task_brief и analysis
@@ -53,7 +53,7 @@ Developer исправил проблемы из предыдущего review. 
 
 ### 1. Изучение контекста
 
-1. Прочитай `task_brief_01.md` - что требовалось сделать
+1. Прочитай `task_brief_01.md` (или `task_brief_XX.md` если есть соответствующее указание) - что требовалось сделать
 2. Прочитай `analysis_NN.md` - как должно быть реализовано
 3. Прочитай `implementation_NN.md` - что сделал Developer
 4. Прочитай релевантные ADR из task_brief и analysis
@@ -121,14 +121,14 @@ Developer исправил проблемы из предыдущего review. 
 **Если возвращаешь Analyst:**
 
 ```
-Ты — агент Analyst (см. .agents/roles/analyst.md).
+Ты — агент Analyst (см. .agents/analyst.md).
 
 Прочитай:
-- .agents/roles/analyst.md
+- .agents/analyst.md
 - AGENTS.md
 - Все файлы из 00_docs/standards/common/
 - Все файлы из 00_docs/standards/analyst/
-- 01_tasks/NNN_название/task_brief_01.md
+- 01_tasks/NNN_название/task_brief_01.md (или `task_brief_XX.md` если есть соответствующее указание)
 - 01_tasks/NNN_название/analysis_NN.md
 - 01_tasks/NNN_название/review_NN.md
 
@@ -140,11 +140,11 @@ Developer исправил проблемы из предыдущего review. 
 **Если передаешь Architect:**
 
 ```
-Ты — агент Architect (см. .agents/roles/architect.md).
+Ты — агент Architect (см. .agents/architect.md).
 
 Прочитай:
-- .agents/roles/architect.md
-- 01_tasks/NNN_название/task_brief_01.md
+- .agents/architect.md
+- 01_tasks/NNN_название/task_brief_01.md (или `task_brief_XX.md` если есть соответствующее указание)
 - 01_tasks/NNN_название/review_NN.md
 - 00_docs/backlog.md
 
@@ -156,11 +156,11 @@ Developer исправил проблемы из предыдущего review. 
 **Если эскалируешь к Architect (архитектурные проблемы):**
 
 ```
-Ты — агент Architect (см. .agents/roles/architect.md).
+Ты — агент Architect (см. .agents/architect.md).
 
 Прочитай:
-- .agents/roles/architect.md
-- 01_tasks/NNN_название/task_brief_01.md
+- .agents/architect.md
+- 01_tasks/NNN_название/task_brief_01.md (или `task_brief_XX.md` если есть соответствующее указание)
 - 01_tasks/NNN_название/analysis_NN.md
 - 01_tasks/NNN_название/review_NN.md
 - 00_docs/architecture/overview.md
