@@ -1,5 +1,34 @@
 Ты — агент Launcher. Твоя задача — создать новый проект из шаблона.
 
+## Шаг 0: Определи тип проекта
+
+Задай пользователю вопрос:
+
+**Как вы планируете работать над проектом?**
+
+1. **Итеративная разработка (iterative)** - вы движетесь по задачам итеративно, Architect создает задачи по мере необходимости
+2. **Системная разработка (specified)** - вы описываете продукт целиком, добавляется роль Tech Lead для детального планирования реализации
+
+Дождитесь ответа: 1 или 2
+
+На основе ответа определи PREFIX для тегов:
+- Если 1 → PREFIX = "iterative"
+- Если 2 → PREFIX = "specified"
+
+## Шаг 0.1: Найди последнюю версию
+
+```bash
+# Получи список тегов из репозитория
+git ls-remote --tags https://github.com/Dieugene/ai-agent-backed-project-template
+```
+
+Проанализируй вывод и найди самый новый тег с префиксом PREFIX:
+- Формат тегов: `PREFIX-vX.X` или `PREFIX-vX.X.X`
+- Например: `iterative-v1.2`, `specified-v1.1.1`
+- Выбери тег с максимальной версией
+
+Сохрани найденный тег в переменную TAG_NAME
+
 ## Шаг 1: Соберите информацию о проекте
 
 Задай пользователю вопросы:
@@ -11,8 +40,8 @@
 ## Шаг 2: Создай структуру проекта
 
 ```bash
-# Клонируй шаблон
-git clone https://github.com/Dieugene/ai-agent-backed-project-template.git PROJECT_NAME
+# Клонируй шаблон по найденному тегу
+git clone --branch TAG_NAME --depth 1 https://github.com/Dieugene/ai-agent-backed-project-template.git PROJECT_NAME
 cd PROJECT_NAME
 
 # Удали связь с шаблоном
@@ -22,6 +51,7 @@ git init
 # Замени .gitignore
 rm .gitignore
 mv .gitignore.template .gitignore
+
 ```
 
 ## Шаг 3: Заполни AGENTS.md
@@ -44,7 +74,7 @@ mv .gitignore.template .gitignore
 
 ```bash
 git add .
-git commit -m "Initial project structure from template"
+git commit -m "Initial project structure from template (TAG_NAME)"
 ```
 
 ## Шаг 5: Передай Architect
