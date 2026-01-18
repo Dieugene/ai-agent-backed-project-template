@@ -1,0 +1,166 @@
+# .gitignore для проекта
+# Скопируйте этот файл как .gitignore в корень вашего проекта
+
+# ====================
+# Environment
+# ====================
+
+# Python
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# ====================
+# Data and Logs
+# ====================
+
+# Рабочие данные
+04_data/
+!04_data/README.md
+!04_data/examples/          # Примеры для документации (если есть)
+
+# Логи
+05_logs/
+!05_logs/README.md
+!05_logs/examples/          # Примеры для документации (если есть)
+
+# ====================
+# IDE and Editors
+# ====================
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ====================
+# OS
+# ====================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+
+# ====================
+# Testing
+# ====================
+
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ====================
+# Documentation
+# ====================
+
+# Sphinx
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# ====================
+# Project Specific
+# ====================
+
+# Добавьте сюда специфичные для проекта исключения
+
+# Временные файлы
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Compiled files
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Docker
+*.log
+
+# ====================
+# Security
+# ====================
+
+# Private keys
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Credentials
+credentials.json
+service-account.json
+secrets.json
