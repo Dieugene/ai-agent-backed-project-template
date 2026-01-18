@@ -6,6 +6,7 @@
 project/
 ├── .agents/                  # Описания ролей агентов
 │   ├── architect.md
+│   ├── tech-lead.md
 │   ├── analyst.md
 │   ├── developer.md
 │   ├── reviewer.md
@@ -21,6 +22,7 @@ project/
 │   ├── standards/           # Стандарты
 │   │   ├── common/         # Общие для всех ролей
 │   │   ├── architect/      # Специфичные для Architect
+│   │   ├── tech-lead/      # Специфичные для Tech Lead
 │   │   ├── analyst/        # Специфичные для Analyst
 │   │   ├── developer/      # Специфичные для Developer
 │   │   └── reviewer/       # Специфичные для Reviewer

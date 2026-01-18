@@ -20,13 +20,18 @@
 - **Файлы:** Этот файл (AGENTS.md), README.md
 
 ## Architect (Архитектор)
-- **Запускается:** При обсуждении архитектуры, создании задач, приемке работ, управлении worktree
-- **Задача:** Ведет backlog, принимает архитектурные решения (ADR), создает постановки задач, управляет worktree для параллельной работы
+- **Запускается:** При обсуждении архитектуры, архитектурных решениях, эскалации от Tech Lead
+- **Задача:** Создает архитектуру системы (overview.md), принимает архитектурные решения (ADR). **НЕ** ведет backlog, **НЕ** создает задачи, **НЕ** принимает работу.
 - **Файлы:** `.agents/architect.md`
 
+## Tech Lead (Технический лидер)
+- **Запускается:** После создания архитектуры Architect, при приемке работ, эскалации от Analyst/Reviewer
+- **Задача:** Создает план реализации (implementation_plan.md), **ведет backlog.md**, **создает задачи (task_brief)**, проектирует интерфейсы, **принимает выполненную работу**
+- **Файлы:** `.agents/tech-lead.md`
+
 ## Analyst (Аналитик)
-- **Запускается:** После получения постановки от Architect или замечаний от Reviewer
-- **Задача:** Создает детальное техническое задание для Developer
+- **Запускается:** После получения постановки от Tech Lead или замечаний от Reviewer
+- **Задача:** Создает детальное техническое задание для Developer с учетом implementation plan. Эскалирует к Tech Lead (план) или Architect (архитектура).
 - **Файлы:** `.agents/analyst.md`
 
 ## Developer (Разработчик)
@@ -36,7 +41,7 @@
 
 ## Reviewer (Ревьюер)
 - **Запускается:** После завершения реализации Developer
-- **Задача:** Проверяет код на соответствие ТЗ и стандартам, создает отчет
+- **Задача:** Проверяет код на соответствие ТЗ и стандартам, создает отчет. Передает **Tech Lead** для приемки.
 - **Файлы:** `.agents/reviewer.md`
 
 ---
@@ -67,18 +72,35 @@ AGENTS.md                              # Этот файл - обзор прое
 ## Что читает Architect
 
 ```
-.agents/architect.md             # Описание роли
+.agents/architect.md                   # Описание роли
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/architect/*          # Стандарты для Architect
-00_docs/backlog.md                     # Реестр задач (создает/читает/обновляет)
 00_docs/architecture/                  # Архитектурные документы
 ├── overview.md                        # Общая архитектура (создает/обновляет)
-└── decision_NNN_*.md                  # ADR - архитектурные решения (создает)
+├── decision_NNN_*.md                  # ADR - архитектурные решения (создает)
+└── _questions_architect.md            # Вопросы от Tech Lead (читает при эскалации)
+```
+
+---
+
+## Что читает Tech Lead
+
+```
+.agents/tech-lead.md                   # Описание роли
+AGENTS.md                              # Этот файл
+00_docs/standards/common/*             # Общие стандарты
+00_docs/standards/tech-lead/*          # Стандарты для Tech Lead
+00_docs/backlog.md                     # Реестр задач (создает/ведет/обновляет)
+00_docs/architecture/                  # Архитектурные документы
+├── overview.md                        # Общая архитектура (читает)
+├── decision_NNN_*.md                  # ADR - архитектурные решения (читает)
+├── implementation_plan.md             # План реализации (создает)
+└── _questions_architect.md            # Вопросы к Architect (создает если нужно)
 01_tasks/NNN_*/                        # Папки задач
 ├── task_brief_01.md                   # Постановки задач (создает)
-└── review_NN.md                       # Отчеты проверки (читает при приемке)
-.worktrees/                            # Git worktrees (параллельная работа с ветками)
+├── review_NN.md                       # Отчеты проверки (читает при приемке)
+└── _questions_tech_lead.md            # Вопросы от Analyst (читает)
 ```
 
 ---
@@ -86,17 +108,19 @@ AGENTS.md                              # Этот файл
 ## Что читает Analyst
 
 ```
-.agents/analyst.md               # Описание роли
+.agents/analyst.md                     # Описание роли
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/analyst/*            # Стандарты для Analyst
 00_docs/architecture/overview.md       # Общая архитектура
+00_docs/architecture/implementation_plan.md # План реализации (релевантная часть)
 00_docs/architecture/decision_NNN_*.md # Релевантные ADR (указаны в task_brief)
 01_tasks/NNN_*/                        # Папка задачи
-├── task_brief_01.md                   # Постановка от Architect (читает)
+├── task_brief_01.md                   # Постановка от Tech Lead (читает)
 ├── analysis_NN.md                     # Техническое задание (создает/обновляет)
 ├── review_NN.md                       # Замечания Reviewer (читает при итерации)
-└── _questions_architect.md            # Вопросы для эскалации (создает если нужно)
+├── _questions_tech_lead.md            # Вопросы для Tech Lead (создает если нужно)
+└── _questions_architect.md            # Вопросы для Architect (создает если нужно)
 02_src/                                # Исходный код (изучает существующий)
 ```
 
@@ -105,7 +129,7 @@ AGENTS.md                              # Этот файл
 ## Что читает Developer
 
 ```
-.agents/developer.md             # Описание роли
+.agents/developer.md                   # Описание роли
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/developer/*          # Стандарты для Developer
@@ -125,7 +149,7 @@ AGENTS.md                              # Этот файл
 ## Что читает Reviewer
 
 ```
-.agents/reviewer.md              # Описание роли
+.agents/reviewer.md                    # Описание роли
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/reviewer/*           # Стандарты для Reviewer
@@ -146,7 +170,7 @@ AGENTS.md                              # Этот файл
 Каждая задача в отдельной папке `NNN_название/` (NNN = 001, 002, 003...)
 
 **Файлы задачи:**
-- `task_brief_01.md` - постановка от Architect
+- `task_brief_01.md` - постановка от Tech Lead
 - `analysis_NN.md` - техническое задание от Analyst
 - `implementation_NN.md` - отчет Developer
 - `review_NN.md` - отчет Reviewer
