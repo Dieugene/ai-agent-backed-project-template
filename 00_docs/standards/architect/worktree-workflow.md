@@ -1,214 +1,93 @@
 # Workflow с Git Worktree
 
-Правила и best practices для работы с worktree в проекте.
+Правила использования git worktree для параллельной работы в проекте.
 
-## Когда создавать worktree
+## Когда использовать worktree
 
-### ✅ Создавай worktree:
+### ✅ Используй worktree для:
 
-1. **Параллельные задачи**
-   - Задача 001 на review, можно начать 002
-   - Несколько независимых фич одновременно
+**1. Параллельных задач**
+- Задача 001 на review, начинаем 002
+- Несколько независимых фич одновременно
+- Срочный hotfix во время разработки feature
 
-2. **Проверка гипотез**
-   - Тестирование разных подходов к реализации
-   - Сравнение алгоритмов
+**2. Экспериментов**
+- Проверка гипотез без влияния на основную разработку
+- Сравнение разных подходов к реализации
+- Тестирование архитектурных решений
 
-3. **Срочные правки**
-   - Hotfix пока feature в разработке
-   - Критичный баг при работе над feature
+**3. Альтернативных архитектурных решений**
+- Экспериментальные ADR
+- Proof of concept для новых паттернов
+- Тестирование разных технологий/библиотек
 
-4. **Эксперименты**
-   - Пробные изменения без риска для main
-   - Proof of concept
+**4. Изолированных изменений**
+- Рефакторинг требующий отдельного контекста
+- Изменения затрагивающие много файлов
+- Работа требующая особой концентрации
 
-### ❌ НЕ создавай worktree:
+### ❌ НЕ используй worktree для:
 
-- Для последовательной работы (просто работай в main)
-- Для мелких правок (commit в текущую ветку)
+- Последовательной работы (работай в main)
+- Мелких правок (commit в текущую ветку)
 - "На всякий случай" без конкретной цели
 
 ## Naming conventions
 
-**Задачи:**
-- Папка worktree: `.worktrees/NNN_task-name`
-- Ветка: `task-NNN`
-- Пример: `.worktrees/002_api-integration` → ветка `task-002`
+**Правило:** Имя папки worktree = имя ветки
 
-**Эксперименты:**
-- Папка worktree: `.worktrees/experiment-name`
-- Ветка: `experiment-name`
-- Пример: `.worktrees/experiment-caching` → ветка `experiment-caching`
+**Примеры:**
+- `.worktrees/task-002` на ветке `task-002`
+- `.worktrees/experiment` на ветке `experiment`
+- `.worktrees/refactor-api` на ветке `refactor-api`
 
-## Жизненный цикл worktree
-
-### 1. Создание
+## Создание worktree
 
 **Architect создает через skill:**
 ```
-Создай worktree для задачи 002_api-integration
+Создай worktree для [название/цель]
 ```
 
-**Skill выполняет:**
-- Создает worktree в `.worktrees/002_api-integration`
-- Создает ветку `task-002`
-- Копирует `task_brief_01.md` в worktree (если задача)
+**Skill:**
+1. Проверяет git status
+2. Спрашивает о коммите если есть незакоммиченные изменения
+3. Спрашивает имя ветки/папки
+4. Создает worktree: `git worktree add .worktrees/название`
 
-### 2. Работа
-
-**В worktree работают как обычно:**
+**После создания** - работа в worktree идет как обычно через роли:
 - Analyst → Developer → Reviewer
-- Коммиты в ветку `task-002`
-- Регулярные коммиты (не реже раза в сессию)
+- Коммиты в свою ветку worktree
 
-### 3. Синхронизация (для долгих задач)
+## Работа с worktree
 
-**Если задача длится >3 дней:**
+**Список активных worktree:**
 ```bash
-cd .worktrees/002_api-integration
-git merge main  # Подтянуть изменения из main
-# Разрешить конфликты если есть
-git add .
-git commit -m "Merge main into task-002"
+git worktree list
 ```
 
-### 4. Приемка и merge
-
-**После review и приемки:**
+**Переключение между worktree:**
 ```bash
-# В worktree: убедиться что все чисто
-cd .worktrees/002_api-integration
-git status  # Должно быть: nothing to commit, working tree clean
-
-# Вернуться в main
-cd ../..
-git checkout main
-
-# Слить
-git merge task-002
-
-# При конфликтах - разрешить
-```
-
-### 5. Удаление
-
-**Только после успешного merge:**
-```bash
-git worktree remove .worktrees/002_api-integration
-git branch -d task-002
-```
-
-## Best practices
-
-### Регулярные коммиты
-
-❌ **Плохо:**
-```
-# Работа 3 дня без коммитов
-# Потом один гигантский коммит
-```
-
-✅ **Хорошо:**
-```
-# Analyst завершил - коммит
-# Developer реализовал компонент - коммит
-# Developer завершил - коммит
-# Reviewer завершил - коммит
-```
-
-### Описательные коммиты в worktree
-
-```bash
-git commit -m "task-002: Complete analysis"
-git commit -m "task-002: Implement API client"
-git commit -m "task-002: Add error handling"
-git commit -m "task-002: Pass review"
-```
-
-### Синхронизация с main
-
-**Если работаешь >3 дней:**
-```bash
-# Каждые 2-3 дня
-cd .worktrees/NNN_task-name
-git merge main
-```
-
-**Зачем:** Меньше конфликтов при финальном merge.
-
-### Чистый worktree перед merge
-
-```bash
-# Перед merge убедись что нет uncommitted changes
-git status  # Должно быть чисто
-```
-
-## Разрешение конфликтов
-
-### При merge main → worktree
-
-```bash
-cd .worktrees/002_api-integration
-git merge main
-# CONFLICT in file.py
-
-# Открыть file.py, разрешить конфликты
-git add file.py
-git commit -m "task-002: Merge main, resolve conflicts"
-```
-
-### При merge worktree → main
-
-```bash
-git checkout main
-git merge task-002
-# CONFLICT in file.py
-
-# Открыть file.py, разрешить конфликты
-git add file.py
-git commit -m "Merge task-002: resolve conflicts"
-```
-
-## Troubleshooting
-
-### Забыл закоммитить перед merge
-
-```bash
-cd .worktrees/002_api-integration
-git add .
-git commit -m "task-002: Final changes"
-cd ../..
-git merge task-002
-```
-
-### Worktree "застрял"
-
-```bash
-# Принудительное удаление (осторожно!)
-git worktree remove --force .worktrees/002_api-integration
-git branch -D task-002  # Удаляет ветку даже если не merged
-```
-
-### Нужно переключиться между worktree
-
-```bash
-# Нельзя использовать git checkout между worktree
-# Используй cd:
-
-cd .worktrees/002_api-integration  # Работа в worktree
-cd ../..                           # Возврат в main
-cd .worktrees/003_feature          # Другой worktree
+cd .worktrees/experiment  # Работа в worktree
+cd ../..                  # Возврат в main
+cd .worktrees/task-002    # Другой worktree
 ```
 
 ## Архитектурные решения в worktree
 
-**Если в worktree нужен ADR:**
+**Экспериментальный ADR:**
+- Создай ADR в worktree
+- После merge попадет в main
+- Другие worktree подтянут через `git merge main`
 
-1. Создай ADR в worktree
-2. После merge ADR попадет в main
-3. Другие worktree синхронизируют через `git merge main`
+**ADR для нескольких worktree:**
+- Создай ADR сразу в main
+- Все worktree подтянут через `git merge main`
 
-**Если ADR нужен для нескольких worktree:**
+## После завершения работы
 
-1. Создай ADR в main (не в worktree)
-2. Все worktree подтянут через `git merge main`
+Пользователь самостоятельно выполняет:
+- Merge ветки в main
+- Удаление worktree
+- Удаление ветки
+
+Через стандартные git команды.

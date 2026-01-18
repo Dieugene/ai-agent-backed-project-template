@@ -1,0 +1,7 @@
+# Эта папка для сохранения истории диалогов с агентами
+
+Формат имени файлов: `YYYY-MM-DD_роль_тема.txt`
+
+Примеры:
+- 2026-01-18_developer_graphql-discussion.txt
+- 2026-01-19_architect_api-design.txt

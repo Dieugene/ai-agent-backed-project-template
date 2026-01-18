@@ -8,7 +8,8 @@ project/
 │   ├── architect.md
 │   ├── analyst.md
 │   ├── developer.md
-│   └── reviewer.md
+│   ├── reviewer.md
+│   └── history/              # Сохраненные истории диалогов
 ├── .claude/                  # Настройки Claude Code
 │   ├── skills/              # Skills для динамической загрузки
 │   └── commands/            # Слеш-команды
