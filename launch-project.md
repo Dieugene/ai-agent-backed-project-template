@@ -133,7 +133,6 @@ git commit -m "Initial project structure from template (TAG_NAME)"
 
 После обсуждения создай:
 - 00_docs/architecture/overview.md
-- 00_docs/backlog.md
 ```
 
 Выведи этот промпт пользователю и объясни, что нужно скопировать его и запустить Architect в новой сессии в папке проекта.
