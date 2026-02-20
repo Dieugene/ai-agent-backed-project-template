@@ -27,11 +27,7 @@
 - Создает `backlog.md` - реестр задач
 - Создает первые `task_brief` - постановки задач
 
-### 3. Analyst создает техническое задание
-
-Скопируйте промпт от Tech Lead и передайте Analyst.
-
-### 4. Передача между агентами
+### 3. Передача между агентами
 
 **Ключевой принцип: Агенты не общаются напрямую. Вы - посредник.**
 
@@ -60,7 +56,7 @@
 **Когда запускать:**
 - После создания архитектуры Architect
 - Приемка работы от Reviewer
-- Эскалация от Analyst
+- Эскалация от Developer
 
 **Что делает:**
 - Создает `implementation_plan.md` - план реализации
@@ -71,26 +67,14 @@
 
 **Файлы:** `.agents/tech-lead.md`
 
-### Analyst (Аналитик)
-**Когда запускать:**
-- После получения промпта от Tech Lead (новая задача)
-- После получения промпта от Reviewer (исправления)
-
-**Что делает:**
-- Создает детальное техническое задание `analysis_NN.md`
-- Описывает КАК реализовать (компоненты, структуры, алгоритмы)
-- Эскалирует к Tech Lead (план) или Architect (архитектура)
-
-**Файлы:** `.agents/analyst.md`
-
 ### Developer (Разработчик)
 **Когда запускать:**
-- После получения промпта от Analyst (есть техническое задание)
+- После получения задачи от Tech Lead
 
 **Что делает:**
 - Пишет код в `02_src/`
 - Создает отчет о реализации `implementation_NN.md`
-- Эскалирует проблемы к Analyst
+- Эскалирует проблемы к Tech Lead
 
 **Файлы:** `.agents/developer.md`
 
@@ -101,7 +85,7 @@
 **Что делает:**
 - Проверяет соответствие коду ТЗ и стандартам
 - Создает отчет о проверке `review_NN.md`
-- Решает: принять (→ Tech Lead), вернуть Analyst, или эскалировать к Tech Lead
+- Решает: принять (→ Tech Lead) или вернуть Developer
 
 **Файлы:** `.agents/reviewer.md`
 
@@ -114,19 +98,14 @@
 1. Вы копируете промпт → Tech Lead
    Tech Lead создает implementation_plan.md
    Tech Lead создает backlog.md
-   Tech Lead создает первые task_brief
-   Tech Lead выдает промпт для Analyst
+   Tech Lead создает task_brief
+   Tech Lead выдает промпт для Developer
    
-2. Вы копируете промпт → Analyst
-   Analyst читает task_brief + implementation_plan
-   Analyst создает analysis_01.md
-   Analyst выдает промпт для Developer
-   
-3. Вы копируете промпт → Developer
+2. Вы копируете промпт → Developer
    Developer пишет код + implementation_01.md
    Developer выдает промпт для Reviewer
    
-4. Вы копируете промпт → Reviewer
+3. Вы копируете промпт → Reviewer
    Reviewer проверяет код + review_01.md
    
    Варианты:
@@ -134,22 +113,15 @@
    А) Все ок → Reviewer выдает промпт для Tech Lead (приемка)
       Вы → Tech Lead принимает работу, обновляет backlog
       
-   Б) Проблемы реализации → Reviewer выдает промпт для Analyst
-      Вы → Analyst создает analysis_02.md
+   Б) Проблемы реализации → Reviewer выдает промпт для Developer
       Вы → Developer исправляет + implementation_02.md
       Вы → Reviewer проверяет + review_02.md
       ... (итерации пока не будет ок)
       
-   В) Проблемы постановки → Reviewer выдает промпт для Tech Lead
-      Вы → Tech Lead обновляет task_brief_02.md
-      Вы → Analyst создает analysis_02.md
-      ...
-      
-   Г) Архитектурные проблемы → Reviewer выдает промпт для Tech Lead
-      Вы → Tech Lead эскалирует к Architect
-      Вы → Architect решает + ADR
+   В) Архитектурные проблемы → Developer эскалирует к Tech Lead
+      Вы → Tech Lead решает или эскалирует к Architect
       Вы → Tech Lead обновляет task_brief
-      Вы → Analyst обновляет analysis
+      Вы → Developer продолжает
       ...
 ```
 
@@ -159,33 +131,22 @@
 
 Иногда агент не может продолжить работу без решения вопроса:
 
-**Analyst → Tech Lead** (вопросы по плану):
-- Analyst создает `01_tasks/NNN/_questions_tech_lead.md`
-- Tech Lead обновляет implementation_plan или task_brief
-- Tech Lead возвращает Analyst
-
-**Analyst → Architect** (архитектурные вопросы):
-- Analyst создает `01_tasks/NNN/_questions_architect.md`
-- Analyst генерирует промпт для Architect
-- Вы копируете → Architect отвечает + создает ADR
-- Architect генерирует промпт для возврата Analyst
+**Developer → Tech Lead** (вопросы по задаче):
+- Developer создает `01_tasks/NNN/_questions_tech_lead.md`
+- Tech Lead отвечает или обновляет task_brief
+- Tech Lead возвращает Developer
 
 **Tech Lead → Architect** (архитектурные решения):
 - Tech Lead создает `00_docs/architecture/_questions_architect.md`
 - Architect принимает решение + ADR
 - Architect возвращает Tech Lead
 
-**Developer → Analyst** (проблемы с ТЗ):
-- Developer создает `01_tasks/NNN/_questions_analyst.md`
-- Analyst отвечает + обновляет analysis
-- Analyst возвращает Developer
-
 ## Смена агента в той же роли
 
 Если контекст агента заполнился и он начинает "тупить":
 
 1. В текущей сессии агента напишите: `/project:handoff-role`
-2. Агент создаст файл передачи дел (например `_analyst_handoff.md`)
+2. Агент создаст файл передачи дел (например `_developer_handoff.md`)
 3. Агент сгенерирует промпт для преемника
 4. Скопируйте промпт и запустите в **новой сессии**
 
@@ -256,7 +217,7 @@ Architect обсуждает архитектуру
 Создай worktree experiment на ветке experiment
 ```
 
-Worktree создает отдельную рабочую директорию (например `.worktrees/experiment/` на ветке `experiment`). В ней работа идет как обычно: Analyst → Developer → Reviewer.
+Worktree создает отдельную рабочую директорию (например `.worktrees/experiment/` на ветке `experiment`). В ней работа идет как обычно: Developer → Reviewer.
 
 **Когда использовать:**
 - Параллельная работа (одна задача на review, начинаем другую)
@@ -273,7 +234,6 @@ Worktree создает отдельную рабочую директорию (
 .agents/                # Описания ролей агентов
 ├── architect.md
 ├── tech-lead.md
-├── analyst.md
 ├── developer.md
 ├── reviewer.md
 └── history/            # Сохраненные истории диалогов
@@ -298,7 +258,6 @@ Worktree создает отдельную рабочую директорию (
 │   ├── common/       # Для всех ролей
 │   ├── architect/    # Для Architect
 │   ├── tech-lead/    # Для Tech Lead
-│   ├── analyst/      # Для Analyst
 │   ├── developer/    # Для Developer
 │   └── reviewer/     # Для Reviewer
 └── backlog.md        # Реестр задач
@@ -306,13 +265,11 @@ Worktree создает отдельную рабочую директорию (
 01_tasks/             # Задачи
 └── NNN_название/     # Папка задачи (NNN = 001, 002...)
     ├── task_brief_01.md         # Постановка от Tech Lead
-    ├── analysis_01.md           # Техническое задание от Analyst
     ├── implementation_01.md     # Отчет Developer
     ├── review_01.md            # Отчет Reviewer
-    ├── analysis_02.md          # При итерации
     ├── implementation_02.md    # При итерации
     ├── review_02.md           # При итерации
-    └── _questions_*.md         # Вопросы для эскалации (опционально)
+    └── _questions_tech_lead.md  # Эскалация от Developer
 
 02_src/               # Исходный код
 
@@ -407,9 +364,6 @@ A: Используйте `/project:handoff-role` для смены агента
 
 **Q: Нужно ли создавать тесты?**
 A: Только если вы явно попросите. По умолчанию Developer не создает тесты.
-
-**Q: Можно ли пропустить Analyst?**
-A: Нет. Tech Lead → Analyst → Developer → Reviewer - обязательная последовательность.
 
 **Q: Что если нужно изменить архитектуру?**
 A: Обратитесь к Architect, он создаст/обновит ADR и передаст задачу дальше.

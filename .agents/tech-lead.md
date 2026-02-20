@@ -237,9 +237,9 @@ interface DataContract {
 
    **Принципы:**
    - **Копируй, не ссылайся:** Все интерфейсы, контракты, части ADR - ПОЛНОСТЬЮ в task_brief
-   - **Analyst не должен искать:** Вся информация в одном месте
+   - **Developer не должен искать:** Вся информация в одном месте
    - **Детальность:** Более детально чем у Architect
-   - **Достаточность:** Analyst может начать работу сразу
+   - **Достаточность:** Developer может начать работу сразу
    - **Лаконичность:** Без избыточности, только по делу
    - ❌ НЕ пиши: "см. implementation_plan раздел X" 
    - ✅ ПИШИ: Скопируй содержимое раздела X прямо в task_brief
@@ -248,22 +248,21 @@ interface DataContract {
    - Статус задачи: "В работе"
    - Укажи дату начала
 
-5. **Сформируй промпт для Analyst:**
+5. **Сформируй промпт для Developer:**
 
 ```
-Ты — агент Analyst (см. .agents/analyst.md).
+Ты — агент Developer (см. .agents/developer.md).
 
 Прочитай:
-- .agents/analyst.md
+- .agents/developer.md
 - AGENTS.md
-- 00_docs/architecture/overview.md
 - Все файлы из 00_docs/standards/common/
-- Все файлы из 00_docs/standards/analyst/
+- Все файлы из 00_docs/standards/developer/
 - 01_tasks/NNN_название/task_brief_01.md
 
-Задача: Создай техническое задание в 01_tasks/NNN_название/analysis_01.md
+Задача: Реализуй задачу, создай отчет в 01_tasks/NNN_название/implementation_01.md
 
-После завершения сформируй промпт для Developer.
+После завершения сформируй промпт для Reviewer.
 ```
 
 6. Положи промпт в чат для копирования
@@ -323,56 +322,53 @@ Tech Lead обнаружил проблему при планировании р
 
 **A) Проблемы в постановке задачи (недостаточно деталей в task_brief):**
 - Создай `task_brief_02.md` с уточнениями
-- Сформируй промпт для Analyst для создания `analysis_02.md`
+- Сформируй промпт для Developer
 
 **Б) Проблемы реализации (bugs, недочеты в коде):**
-- Reviewer уже передал Analyst
-- Analyst создаст `analysis_02.md` с исправлениями
+- Reviewer уже передал Developer
 - Твое участие не требуется (но обнови backlog: "В работе - итерация 2")
 
 **В) Архитектурные проблемы:**
 - Эскалируй к Architect
 - После получения решения обнови `task_brief_02.md`
-- Передай Analyst
+- Передай Developer
 
-**Г) Вопросы от Analyst:**
-- Analyst эскалировал через `_questions_tech_lead.md`
+**Г) Вопросы от Developer:**
+- Developer эскалировал через `_questions_tech_lead.md`
 - Прочитай вопросы
-- Обнови implementation_plan если нужно
-- Ответь и верни Analyst
+- Обнови task_brief если нужно
+- Ответь и верни Developer
 
-Следуй стандарту: `00_docs/standards/tech-lead/escalation-from-analyst.md`
+### 6. Ответ на эскалацию от Developer
 
-### 6. Ответ на эскалацию от Analyst
-
-**Когда:** Analyst создал `01_tasks/NNN/_questions_tech_lead.md`
+**Когда:** Developer создал `01_tasks/NNN/_questions_tech_lead.md`
 
 **Процесс:**
 1. Прочитай файл вопросов
 2. Проанализируй:
-   - Недостающие детали → дополни implementation_plan
-   - Противоречие → исправь plan
+   - Недостающие детали → дополни task_brief
+   - Противоречие → исправь task_brief
    - Архитектурный вопрос → эскалируй к Architect
    - Просто уточнение → ответь
 
-3. Обнови plan если нужно
+3. Обнови task_brief если нужно
 
-4. **Сформируй промпт для возврата Analyst:**
+4. **Сформируй промпт для возврата Developer:**
 
 ```
-Ты - Analyst (см. .agents/analyst.md).
+Ты - Developer (см. .agents/developer.md).
 
 Прочитай:
-- .agents/analyst.md
+- .agents/developer.md
 - AGENTS.md
 - 00_docs/standards/common/*
-- 00_docs/standards/analyst/*
-- 00_docs/architecture/implementation_plan.md (обновлен)
+- 00_docs/standards/developer/*
+- 01_tasks/NNN_название/task_brief_01.md (обновлен)
 - 01_tasks/NNN/_questions_tech_lead.md (есть ответ внутри)
 
-Tech Lead ответил на вопросы и обновил implementation plan.
+Tech Lead ответил на вопросы.
 
-Удали _questions_tech_lead.md и продолжи создание analysis.
+Удали _questions_tech_lead.md и продолжи реализацию.
 ```
 
 ## HANDOFF

@@ -25,17 +25,12 @@
 - **Файлы:** `.agents/architect.md`
 
 ## Tech Lead (Технический лидер)
-- **Запускается:** После создания архитектуры Architect, при приемке работ, эскалации от Analyst/Reviewer
+- **Запускается:** После создания архитектуры Architect, при приемке работ, эскалации от Developer/Reviewer
 - **Задача:** Создает план реализации (implementation_plan.md), **ведет backlog.md**, **создает задачи (task_brief)**, проектирует интерфейсы, **принимает выполненную работу**
 - **Файлы:** `.agents/tech-lead.md`
 
-## Analyst (Аналитик)
-- **Запускается:** После получения постановки от Tech Lead или замечаний от Reviewer
-- **Задача:** Создает детальное техническое задание для Developer с учетом implementation plan. Эскалирует к Tech Lead (план) или Architect (архитектура).
-- **Файлы:** `.agents/analyst.md`
-
 ## Developer (Разработчик)
-- **Запускается:** После получения технического задания от Analyst
+- **Запускается:** После получения задачи от Tech Lead
 - **Задача:** Пишет код, создает отчет о реализации
 - **Файлы:** `.agents/developer.md`
 
@@ -100,28 +95,7 @@ AGENTS.md                              # Этот файл
 01_tasks/NNN_*/                        # Папки задач
 ├── task_brief_01.md                   # Постановки задач (создает)
 ├── review_NN.md                       # Отчеты проверки (читает при приемке)
-└── _questions_tech_lead.md            # Вопросы от Analyst (читает)
-```
-
----
-
-## Что читает Analyst
-
-```
-.agents/analyst.md                     # Описание роли
-AGENTS.md                              # Этот файл
-00_docs/standards/common/*             # Общие стандарты
-00_docs/standards/analyst/*            # Стандарты для Analyst
-00_docs/architecture/overview.md       # Общая архитектура
-00_docs/architecture/implementation_plan.md # План реализации (релевантная часть)
-00_docs/architecture/decision_NNN_*.md # Релевантные ADR (указаны в task_brief)
-01_tasks/NNN_*/                        # Папка задачи
-├── task_brief_01.md                   # Постановка от Tech Lead (читает)
-├── analysis_NN.md                     # Техническое задание (создает/обновляет)
-├── review_NN.md                       # Замечания Reviewer (читает при итерации)
-├── _questions_tech_lead.md            # Вопросы для Tech Lead (создает если нужно)
-└── _questions_architect.md            # Вопросы для Architect (создает если нужно)
-02_src/                                # Исходный код (изучает существующий)
+└── _questions_tech_lead.md            # Вопросы от Developer (читает)
 ```
 
 ---
@@ -133,13 +107,12 @@ AGENTS.md                              # Этот файл
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/developer/*          # Стандарты для Developer
-00_docs/architecture/decision_NNN_*.md # Релевантные ADR (указаны в analysis)
+00_docs/architecture/decision_NNN_*.md # Релевантные ADR (указаны в task_brief)
 01_tasks/NNN_*/                        # Папка задачи
-├── task_brief_01.md                   # Исходная постановка (читает)
-├── analysis_NN.md                     # Техническое задание (читает)
+├── task_brief_01.md                   # Постановка от Tech Lead (читает)
 ├── implementation_NN.md               # Отчет о реализации (создает)
 ├── review_NN.md                       # Замечания Reviewer (читает при итерации)
-└── _questions_analyst.md              # Вопросы для эскалации (создает если нужно)
+└── _questions_tech_lead.md            # Вопросы для Tech Lead (создает если нужно)
 02_src/                                # Исходный код (создает/изменяет)
 03_data/                               # Данные (читает/создает если нужно)
 ```
@@ -153,10 +126,9 @@ AGENTS.md                              # Этот файл
 AGENTS.md                              # Этот файл
 00_docs/standards/common/*             # Общие стандарты
 00_docs/standards/reviewer/*           # Стандарты для Reviewer
-00_docs/architecture/decision_NNN_*.md # Релевантные ADR (указаны в task_brief/analysis)
+00_docs/architecture/decision_NNN_*.md # Релевантные ADR (указаны в task_brief)
 01_tasks/NNN_*/                        # Папка задачи
-├── task_brief_01.md                   # Исходная постановка (читает)
-├── analysis_NN.md                     # Техническое задание (читает)
+├── task_brief_01.md                   # Постановка (читает)
 ├── implementation_NN.md               # Отчет Developer (читает)
 └── review_NN.md                       # Отчет о проверке (создает)
 02_src/                                # Исходный код (читает для проверки)
@@ -171,10 +143,9 @@ AGENTS.md                              # Этот файл
 
 **Файлы задачи:**
 - `task_brief_01.md` - постановка от Tech Lead
-- `analysis_NN.md` - техническое задание от Analyst
 - `implementation_NN.md` - отчет Developer
 - `review_NN.md` - отчет Reviewer
-- `_questions_*.md` - служебные файлы для эскалации
+- `_questions_tech_lead.md` - эскалация от Developer
 
 ### 02_src/ - Исходный код
 Структура определяется проектом. Developer создает и изменяет код здесь.
