@@ -1,35 +1,49 @@
-# Workspace для разработки c ИИ (Claude Code-совместимыми)
+# Pool Patterns — Knowledge Base
 
-## 🚀 Как стартовать
+Эта ветка — **обезличенный knowledge base** по организации workspace с
+командой Claude Code сессий, работающих параллельно (multi-peer pool).
+Не шаблон проекта. Не запускается через `/launch-project`. Читается по
+ссылке.
 
-Скопируйте `launch-project.md` из корня репозитория в:
-- **Windows:** `C:\Users\<user>\.claude\commands\`
-- **macOS/Linux:** `~/.claude/commands/`
+Сценарий ортогонален основным веткам этого репозитория:
 
-Запустите в Claude Code или Cursor:
-```
-/launch-project
-```
+| Ветка | Сценарий |
+|-------|----------|
+| `main` | Точка входа: `/launch-project` slash-command, README, branch-switch-guide |
+| `iterative` | Single-developer, итеративная разработка (analyst → architect → developer → reviewer) |
+| `specified` | Single-developer, spec-driven с Tech Lead'ом (architect → tech-lead → developer → reviewer) |
+| **`pool-patterns`** (эта) | **Multi-peer pool**: N специализированных peer-агентов координируются через Tasks API + общий mailbox + UserPromptSubmit hook |
 
-Вся магия там. На русском. Заглядывайте, если интересно.
+## С чего начать
 
----
+→ [`docs/README.md`](docs/README.md) — индекс knowledge base с описанием
+каждого документа и тремя путями входа (только знакомитесь / поднимаете
+pool с нуля / разбираете production-инцидент).
 
-## 📖 А почитать?
+## Что внутри
 
-**Работаете итеративно по задачам?**  
-→ [Iterative Branch](https://github.com/Dieugene/ai-agent-backed-project-template/tree/iterative)  
-Для исследовательских проектов. Разбираетесь в теме, делаете задачу, смотрите результат, переходите к следующей.
+В `docs/` — 8 документов:
 
-**Есть видение всего проекта?**  
-→ [Specified Branch](https://github.com/Dieugene/ai-agent-backed-project-template/tree/specified)  
-Обсуждаете всё с Architect, дальше Tech Lead управляет реализацией. Делегируете и контролируете.
+- `workspace-organization.md` — монорепо variants A/B, plain vs pool режим.
+- `pool-communication.md` — координационный стандарт pool (Tasks API,
+  mailbox, hook, **инвариант top-level `owner`**).
+- `tech-lead-mode.md` — subagent-driven Tech Lead и superpowers-скилы.
+- `wrapper-and-hook-scripts.md` — полный рабочий код `pool-launch.ps1`
+  и `inject-inbox.ps1`.
+- `intra-project-pool-recipe.md` — пошаговый bootstrap pool с нуля.
+- `devops-two-layer.md` — server-wide orchestrator + per-monorepo split.
+- `lessons-learned.md` — 13 антипаттернов с реальной практики.
+- `sre-self-healing-pipeline.md` — замкнутый контур самовосстановления
+  AI-сервисов (опубликовано ранее).
 
-**Хотите просто посмотреть?**  
-Переключайтесь между ветками через GitHub:
+## Анонимизация
 
-![Переключение веток](branch-switch-guide.png)
+Все идентификаторы — placeholder'ы: `<workspace-root>`, `<pool-name>`,
+`<role>-<scope>`, `<vps-ip>`. Никаких реальных хостов, путей, имён
+подпроектов. Примеры обозначены как «из практики».
 
----
+## Для других сценариев
 
-**Версии:** Репозиторий использует теги `iterative-v1.X` и `specified-v1.X`. Команда `/launch-project` берет последнюю автоматически.
+Если ищете шаблон проекта под single-developer workflow — переключитесь
+на ветку `main` и читайте `README.md` там (про `/launch-project` + ветки
+`iterative`/`specified`).
