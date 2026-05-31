@@ -14,12 +14,12 @@ Claude Code сессий (несколько специализированны�
 | Документ | О чём |
 |----------|-------|
 | [Workspace Organization](workspace-organization.md) | Базовая модель: монорепо (variant A — отдельные репо подпроектов + parent для стандартов; variant B — один git на всё), анатомия workspace и подпроекта, plain vs pool режим, мульти-пулинг. |
-| [Pool Communication](pool-communication.md) | Координационный стандарт pool: env vars, Tasks API, общий mailbox `.inbox/`, UserPromptSubmit hook, топология (inter-project vs intra-project), per-owner handoff. Инвариант top-level `owner` — центральная грабля. |
+| [Pool Communication](pool-communication.md) | Координационный стандарт pool: env vars, Tasks API, общий mailbox `.inbox/`, UserPromptSubmit hook, топология (inter-project vs intra-project), per-owner handoff. Инвариант top-level `owner` — центральная грабля. Опциональный push-watcher входящих задач (§7.5). |
 | [Tech Lead Mode](tech-lead-mode.md) | Единственная активная агентская роль и её subagent-driven работа. Какие superpowers-скилы и когда применять. Что Tech Lead не делает в одиночку, когда эскалирует к пользователю. |
-| [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md) | Полные рабочие примеры скриптов pool-инфры: `pool-launch.ps1` (auto-resume по display name), `inject-inbox.ps1` (UserPromptSubmit hook с полным кодом), wrapper-батник на агента. Discovery walk-up, UTF-8 для кириллицы. |
+| [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md) | Полные рабочие примеры скриптов pool-инфры: `pool-launch.ps1` (auto-resume по display name), `inject-inbox.ps1` (UserPromptSubmit hook с полным кодом), wrapper-батник на агента, опциональный push-watcher `wait-for-task.ps1` + `Get-PendingTasks.ps1` (§4.5). Discovery walk-up, UTF-8 для кириллицы. |
 | [Intra-Project Pool Recipe](intra-project-pool-recipe.md) | Пошаговый recipe подъёма intra-project pool (N peer-агентов внутри одного подпроекта). Зоны до bootstrap, naming, smoke-тест координации, расширение pool, деактивация peer'а. |
 | [DevOps Two-Layer Model](devops-two-layer.md) | Server-wide DevOps Orchestrator + per-monorepo DevOps. Граница ответственности, каналы коммуникации, безопасность, бутстрап двухслойной модели. |
-| [Lessons Learned](lessons-learned.md) | 13 антипаттернов с реальной практики: top-level owner, hook walk-up, размытие границ, helper-launcher по аналогии, mojibake кириллицы, изменения pool-инфры без согласования. |
+| [Lessons Learned](lessons-learned.md) | 14 антипаттернов и пределов с реальной практики: top-level owner, hook walk-up, размытие границ, helper-launcher по аналогии, mojibake кириллицы, изменения pool-инфры без согласования, перевзвод push-watcher'а как действие агента. |
 | [Self-Healing Pipeline](sre-self-healing-pipeline.md) | Архитектура замкнутого контура самовосстановления для production-сервисов под управлением AI-агентов. Опубликована ранее, дополняет DevOps Two-Layer. |
 
 ## С чего читать

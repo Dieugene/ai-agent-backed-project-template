@@ -299,6 +299,197 @@ hook'а — это отдельный security gate. На первом запу�
 
 ---
 
+## 4.5. Опциональный push-watcher (`wait-for-task.ps1`)
+
+Опция «по согласованию», **не для всех агентов** (см. [Pool Communication §7.5](pool-communication.md)). Фоновый watcher будит простаивающую сессию при входящей задаче. Спит в shell-процессе (ноль контекста на ожидании), **read-only** по Tasks-store; состояние — в `<workspace-root>/.watcher-state/` (gitignored): per-owner леджер + heartbeat-lock.
+
+Запуск — **из сессии агента**, фоновой задачей (`Bash run_in_background: true`):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\scripts\wait-for-task.ps1" -Owner <owner> -ListId <pool-name>
+```
+
+### Общая читалка `Get-PendingTasks.ps1`
+
+Тот же фильтр, что у hook'а (§4), вынесен в общую функцию — pull и push опираются на одну логику.
+
+```powershell
+# Get-PendingTasks.ps1
+# Shared reader: returns pending, actionable tasks for one owner from a pool Tasks store.
+# Same filter as inject-inbox.ps1 (status=pending, owner match, kind != personal).
+# Dot-source it:  . (Join-Path $PSScriptRoot 'Get-PendingTasks.ps1')
+
+function Get-PendingTasks {
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$ListId,
+        [string]$TasksDir
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TasksDir)) {
+        $TasksDir = Join-Path $HOME ".claude/tasks/$ListId"
+    }
+
+    $tasks = @()
+    if (Test-Path $TasksDir) {
+        Get-ChildItem -Path $TasksDir -Filter '*.json' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch '^\.' } |
+            ForEach-Object {
+                try {
+                    $raw  = Get-Content -Path $_.FullName -Raw -Encoding UTF8 -ErrorAction Stop
+                    $task = $raw | ConvertFrom-Json -ErrorAction Stop
+                    if ($task) { $tasks += $task }
+                } catch {
+                    # malformed task file - skip silently
+                }
+            }
+    }
+
+    $pending = @($tasks | Where-Object {
+        if ($_.status -ne 'pending') { return $false }
+        if ($_.owner -ne $Owner)     { return $false }
+        $kind = $null
+        if ($_.metadata -and ($_.metadata.PSObject.Properties.Name -contains 'kind')) {
+            $kind = $_.metadata.kind
+        }
+        return $kind -ne 'personal'
+    })
+
+    return $pending
+}
+```
+
+### Watcher `wait-for-task.ps1`
+
+```powershell
+# wait-for-task.ps1
+# Background "sleeping watcher" for ONE pool agent.
+#
+# Polls the pool Tasks store for NEW pending tasks addressed to $Owner. The sleep happens
+# inside this shell process (Start-Sleep) - so it costs ZERO model context while waiting.
+# On the FIRST newly-detected task it records the task id in a private per-owner ledger and
+# EXITS with a report; the harness then wakes the agent. Re-arm is idempotent: an already
+# detected task stays in the ledger and will NOT re-trigger the next watcher.
+#
+# Read-only on the Tasks store (never writes task files). All state lives in $StateDir
+# (ledger + heartbeat lock), which is gitignored and fully owned by the watcher.
+#
+# Launch from the agent session as a BACKGROUND task (Bash run_in_background: true), so it
+# survives across turns and the harness re-invokes the agent when it exits:
+#   powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\scripts\wait-for-task.ps1" -Owner <owner> -ListId <pool-name>
+
+param(
+    [string]$Owner          = $env:AGENT_OWNER,
+    [string]$ListId         = $env:CLAUDE_CODE_TASK_LIST_ID,
+    [int]$IntervalSeconds   = 45,
+    [double]$MaxMinutes     = 0,        # 0 = unlimited
+    [string]$TasksDir,                  # default: $HOME\.claude\tasks\$ListId
+    [string]$StateDir                   # default: <scripts>\..\.watcher-state
+)
+
+$ErrorActionPreference = 'Continue'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding           = [System.Text.UTF8Encoding]::new($false)
+
+if ([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($ListId)) {
+    Write-Output "[WATCHER] ERROR: Owner / ListId not set (pass -Owner / -ListId, or set AGENT_OWNER / CLAUDE_CODE_TASK_LIST_ID)."
+    exit 0
+}
+
+. (Join-Path $PSScriptRoot 'Get-PendingTasks.ps1')
+
+if ([string]::IsNullOrWhiteSpace($StateDir)) {
+    $StateDir = Join-Path $PSScriptRoot '..\.watcher-state'
+}
+if (-not (Test-Path $StateDir)) {
+    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+}
+$ledgerPath = Join-Path $StateDir ("seen-{0}.txt" -f $Owner)
+$lockPath   = Join-Path $StateDir ("lock-{0}.txt"  -f $Owner)
+
+$reArm = '  Bash(run_in_background:true): powershell -NoProfile -ExecutionPolicy Bypass -File "{0}" -Owner {1} -ListId {2}' -f $PSCommandPath, $Owner, $ListId
+
+function Remove-Lock { if (Test-Path $lockPath) { Remove-Item $lockPath -Force -ErrorAction SilentlyContinue } }
+function Touch-Lock  { Set-Content -Path $lockPath -Value ((Get-Date).ToString('o')) -Encoding ASCII }
+
+# --- singleton heartbeat-lock: never run two watchers for the same owner ---
+$staleSeconds = [Math]::Max(120, $IntervalSeconds * 3)
+if (Test-Path $lockPath) {
+    $age = ((Get-Date) - (Get-Item $lockPath).LastWriteTime).TotalSeconds
+    if ($age -lt $staleSeconds) {
+        Write-Output ("[WATCHER] {0}: another watcher already active (lock age {1:N0}s) - exiting (not re-arming)." -f $Owner, $age)
+        exit 0
+    }
+}
+Touch-Lock
+
+# --- load ledger (ids already reported as detected) ---
+$seen = @{}
+if (Test-Path $ledgerPath) {
+    foreach ($line in (Get-Content -Path $ledgerPath -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+        $id = "$line".Trim()
+        if ($id) { $seen[$id] = $true }
+    }
+}
+
+$startTime = Get-Date
+
+while ($true) {
+    $pending    = @(Get-PendingTasks -Owner $Owner -ListId $ListId -TasksDir $TasksDir)
+    $pendingIds = @($pending | ForEach-Object { "$($_.id)" })
+    $new        = @($pending | Where-Object { -not $seen.ContainsKey("$($_.id)") })
+
+    if ($new.Count -gt 0) {
+        # mark ALL current pending as seen (adds new ids, prunes completed ones), persist, report, exit
+        Set-Content -Path $ledgerPath -Value $pendingIds -Encoding UTF8
+        Remove-Lock
+
+        Write-Output ("[WATCHER] {0}: {1} new task(s). Do TWO steps IN ORDER." -f $Owner, $new.Count)
+        Write-Output ""
+        Write-Output "STEP 1 (do this FIRST, before reading the task below - non-negotiable): re-arm the watcher:"
+        Write-Output $reArm
+        Write-Output "(Safe: re-arm will NOT re-fire on the task(s) below - they are already in the ledger.)"
+        Write-Output ""
+        Write-Output "STEP 2 (only after STEP 1 is launched) - handle the task(s):"
+        foreach ($t in $new) {
+            $from = ''
+            if ($t.metadata -and ($t.metadata.PSObject.Properties.Name -contains 'from')) { $from = " (from $($t.metadata.from))" }
+            $title = $null
+            if ($t.PSObject.Properties.Name -contains 'subject' -and -not [string]::IsNullOrWhiteSpace($t.subject)) { $title = $t.subject }
+            elseif ($t.PSObject.Properties.Name -contains 'title' -and -not [string]::IsNullOrWhiteSpace($t.title)) { $title = $t.title }
+            if ([string]::IsNullOrWhiteSpace($title)) { $title = '<no title>' }
+            Write-Output ("- {0}{1}: {2}" -f $t.id, $from, $title)
+            if ($t.metadata -and ($t.metadata.PSObject.Properties.Name -contains 'payload_path')) {
+                Write-Output ("  payload: {0}" -f $t.metadata.payload_path)
+            }
+        }
+        exit 0
+    }
+
+    # prune in-memory ledger of ids no longer pending (keeps it tidy over long runs)
+    if ($seen.Count -gt 0) {
+        $stillPending = @{}
+        foreach ($id in $pendingIds) { if ($seen.ContainsKey($id)) { $stillPending[$id] = $true } }
+        $seen = $stillPending
+    }
+
+    if ($MaxMinutes -gt 0 -and ((Get-Date) - $startTime).TotalMinutes -ge $MaxMinutes) {
+        Set-Content -Path $ledgerPath -Value (@($seen.Keys)) -Encoding UTF8
+        Remove-Lock
+        Write-Output ("[WATCHER] {0}: max runtime ({1} min) reached, no new tasks. Re-arm to keep watching:" -f $Owner, $MaxMinutes)
+        Write-Output $reArm
+        exit 0
+    }
+
+    Touch-Lock                       # heartbeat
+    Start-Sleep -Seconds $IntervalSeconds
+}
+```
+
+**Инварианты и дисциплина** — в [Pool Communication §7.5](pool-communication.md): идемпотентный перевзвод через леджер, один watcher на owner через heartbeat-lock, дисциплина «перевзвод — ШАГ 1». Механизм экспериментальный: подтвердить idle-wake + поведение при `/compact` на своём окружении до раскатки.
+
+---
+
 ## 5. README для скриптов
 
 `<workspace-root>/scripts/README.md` — справка по pool'ам и диагностика:
