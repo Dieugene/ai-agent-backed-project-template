@@ -32,9 +32,16 @@ pool с нуля / разбираете production-инцидент).
   и `inject-inbox.ps1`.
 - `intra-project-pool-recipe.md` — пошаговый bootstrap pool с нуля.
 - `devops-two-layer.md` — server-wide orchestrator + per-monorepo split.
-- `lessons-learned.md` — 13 антипаттернов с реальной практики.
+- `lessons-learned.md` — 15 антипаттернов с реальной практики.
 - `sre-self-healing-pipeline.md` — замкнутый контур самовосстановления
   AI-сервисов (опубликовано ранее).
+
+В `commands/` — переиспользуемые **slash-команды** Claude Code (готовые
+промпт-шаблоны, кладутся в `~/.claude/commands/`):
+
+- `handoff-myself.md` — handoff агента самому себе перед `/compact` или
+  закрытием сессии (поддерживает мульти-агентные пулы). См.
+  [`commands/README.md`](commands/README.md).
 
 ## Анонимизация
 
