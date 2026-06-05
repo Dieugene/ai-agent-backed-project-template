@@ -99,6 +99,16 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# Task-store hygiene (best-effort, never blocks launch): archive completed tasks
+# so Claude Code's built-in task-list context injection (whole list_id, completed
+# included, no owner filter) stays small. See section 4.6.
+try {
+    $janitor = Join-Path $PSScriptRoot 'archive-completed-tasks.ps1'
+    if ((Test-Path $janitor) -and $env:CLAUDE_CODE_TASK_LIST_ID) {
+        & $janitor -ListId $env:CLAUDE_CODE_TASK_LIST_ID -Quiet
+    }
+} catch { }
+
 $projectDir = Join-Path $env:USERPROFILE ".claude\projects\$ProjectKey"
 
 function Find-SessionIdByTitle {
@@ -487,6 +497,74 @@ while ($true) {
 ```
 
 **Инварианты и дисциплина** — в [Pool Communication §7.5](pool-communication.md): идемпотентный перевзвод через леджер, один watcher на owner через heartbeat-lock, дисциплина «перевзвод — ШАГ 1». Механизм экспериментальный: подтвердить idle-wake + поведение при `/compact` на своём окружении до раскатки.
+
+---
+
+## 4.6. Дворник стора задач (`archive-completed-tasks.ps1`)
+
+**Обязателен для любого пула** (в отличие от опционального watcher'а §4.5). Причина — в [Pool Communication §«Lifecycle и накопление completed»](pool-communication.md): встроенная система задач Claude Code инжектит в контекст **весь** список `list_id` почти каждый ход, **включая `completed`** и **без фильтра по `owner`**; в текущих сборках `completed` файл не удаляет, completed копятся, и список на сотни задач съедает 10–15k токенов/ход у каждого peer'а. Выключить только напоминание нельзя. Рычаг — держать живой список коротким.
+
+Дворник переносит (move, не delete → обратимо) `status=completed` старше `-MinAgeHours` из `~/.claude/tasks/<list>/` в соседний `~/.claude/tasks/<list>-archive/` (архив — не `list_id`, харнесс его не инжектит). Read-only по активным; нечитаемые/mid-write пропускает; safe при гонке с CLI.
+
+Вызывается автоматически из `pool-launch.ps1` (блок «Task-store hygiene» в §3) при старте/резюме каждой сессии, `-ListId $env:CLAUDE_CODE_TASK_LIST_ID` → чистит только пул этой сессии. Однократно на запуск; общий список подрезает старт любого peer'а. Разовая большая чистка — вручную `-MinAgeHours 0`, затем `/compact` открытым сессиям.
+
+```powershell
+# archive-completed-tasks.ps1
+# Task-store janitor. Moves COMPLETED task JSONs out of the live pool task-store
+# into a sibling "<ListId>-archive" directory, so Claude Code's built-in task-list
+# context injection (whole list_id, completed included, no owner filter) stays small.
+#
+# Safety: only status=completed older than -MinAgeHours are moved (recent completions
+# stay so a peer can still TaskGet what it just closed); unparseable/mid-write files are
+# skipped; move (not delete) -> reversible; a Move that races a CLI write just retries
+# next run. The archive dir is a sibling, NOT a subdir of the list dir, and its name is
+# not a list_id any session uses -> the harness never injects it.
+
+param(
+    [Parameter(Mandatory)][string]$ListId,
+    [string]$TasksRoot   = (Join-Path $env:USERPROFILE '.claude\tasks'),
+    [int]   $MinAgeHours = 12,
+    [switch]$Quiet
+)
+
+$ErrorActionPreference = 'Continue'
+
+$src = Join-Path $TasksRoot $ListId
+$dst = Join-Path $TasksRoot ($ListId + '-archive')
+
+if (-not (Test-Path $src)) {
+    if (-not $Quiet) { Write-Host "[task-janitor] store not found: $src" }
+    exit 0
+}
+
+$cutoff = (Get-Date).AddHours(-[math]::Abs($MinAgeHours))
+$moved  = 0
+$failed = 0
+
+Get-ChildItem -Path $src -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
+    $file = $_
+    if ($file.LastWriteTime -ge $cutoff) { return }   # too fresh -> keep
+    try {
+        $raw  = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop
+        $task = $raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return   # unparseable / mid-write -> never touch
+    }
+    if ($task.status -ne 'completed') { return }
+    if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+    try {
+        Move-Item -LiteralPath $file.FullName -Destination (Join-Path $dst $file.Name) -Force -ErrorAction Stop
+        $moved++
+    } catch {
+        $failed++   # likely a concurrent CLI write -> skip, retry next run
+    }
+}
+
+if (-not $Quiet) {
+    Write-Host "[task-janitor] $ListId : archived $moved completed task(s) older than ${MinAgeHours}h (failed $failed)"
+}
+exit 0
+```
 
 ---
 

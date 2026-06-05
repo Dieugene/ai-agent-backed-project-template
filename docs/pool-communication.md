@@ -72,7 +72,7 @@ digraph pool {
 Без env vars (опора 1) и hook'а (опора 6) — pool вырождается в обычные
 независимые сессии. Без routing CLAUDE.md (опора 3) — агенты не находят
 свою рабочую папку. Без mailbox (опора 5) — координация деградирует до
-коротких записей в Tasks API, которые стираются по `completed`.
+коротких записей в Tasks API, которые по `completed` теряют смысл сигнала (и копятся в сторе — см. ниже про дворник).
 
 ---
 
@@ -204,20 +204,39 @@ payload в `.inbox/`, но `TaskCreate` либо не вызывают вовс�
 каждого peer'а + периодической ревизией pending-записей без top-level
 `owner`. Подробнее — [Lessons Learned §1](lessons-learned.md).
 
-### Lifecycle и эфемерность `completed`
+### Lifecycle и накопление `completed` (ВАЖНО для контекста)
 
 ```
 TaskCreate              → status: pending      (файл создан)
 TaskUpdate(in_progress) → status: in_progress  (файл живёт)
-TaskUpdate(completed)   → файл удалён физически
+TaskUpdate(completed)   → status: completed     (файл ОСТАЁТСЯ и копится)
 ```
 
-Tasks API не хранит historical record завершённых задач — это не баг, а
-контракт API. Поэтому:
+**Поведение зависит от версии Claude Code — проверьте на своей.** Ранние
+сборки физически удаляли файл по `completed`. В текущих (наблюдалось 2026-06)
+**completed-задачи остаются файлами в сторе и накапливаются бесконечно** — в
+живом пуле быстро набирается сотня-другая completed на десяток активных.
+
+**Почему это критично — встроенная инъекция всего списка в контекст.** Сам
+Claude Code (НЕ ваш hook) почти каждый ход инжектит системным напоминанием
+**весь список `list_id`** — **включая completed** и **без фильтра по `owner`**
+(поле `owner` — ваша конвенция, харнесс про неё не знает). Каждый агент общего
+пула получает дамп ВСЕХ задач всех соседей: сотни строк ≈ 10–15k токенов на ход,
+и это копится в диалоге. Выключить только напоминание, сохранив инструменты
+`TaskCreate`/`TaskList`, **нельзя** (`CLAUDE_CODE_ENABLE_TASKS=0` рубит и
+инструменты). Единственный рычаг — **держать живой список коротким**.
+
+⇒ **В пуле обязателен «дворник», архивирующий completed.** Скрипт-эталон и
+интеграция в launcher — [Wrapper and Hook Scripts §4.6](wrapper-and-hook-scripts.md).
+Кратко: перенос (move, не delete → обратимо) `status=completed` старше N часов
+из `~/.claude/tasks/<list>/` в соседний `~/.claude/tasks/<list>-archive/` (архив
+— не `list_id`, харнесс его не инжектит); вызывается из `pool-launch.ps1` при
+старте каждой сессии, чистит только пул этой сессии.
 
 - **Persistent record координации** = payload-файлы `.inbox/<pool-id>/TASK-NNN.md`
-  + git-история workspace-root.
-- **Tasks API** = эфемерный inbox-сигнал «сейчас на тебе висит вот это».
+  + git-история workspace-root. Архив — разгрузка контекста, не источник истины.
+- **Tasks API** = эфемерный inbox-сигнал «сейчас на тебе висит вот это»; completed
+  считать «закрыто», даже если файл физически дожил до архива.
 
 Если нужна аудитория «когда что было закрыто» — в git-логе, не в Tasks API.
 
@@ -569,7 +588,7 @@ digraph lifecycle {
   ACCEPT [label="B: читает payload\nTaskUpdate(status=in_progress)"];
   WORK [label="B: делает работу,\nопц. progress-файл"];
   REPLY [label="B: .inbox/TASK-NNN-reply.md\nTaskUpdate(owner=A, status=pending)"];
-  CLOSE [label="A или B:\nTaskUpdate(status=completed)\n→ файл задачи стирается"];
+  CLOSE [label="A или B:\nTaskUpdate(status=completed)\n→ закрыто (файл остаётся,\nпозже в архив дворником)"];
   PERSIST [label="payload остаётся в .inbox/\nкак persistent история"];
 
   CREATE -> HOOK -> ACCEPT -> WORK -> REPLY -> CLOSE -> PERSIST;

@@ -32,7 +32,7 @@ pool с нуля / разбираете production-инцидент).
   и `inject-inbox.ps1`.
 - `intra-project-pool-recipe.md` — пошаговый bootstrap pool с нуля.
 - `devops-two-layer.md` — server-wide orchestrator + per-monorepo split.
-- `lessons-learned.md` — 15 антипаттернов с реальной практики.
+- `lessons-learned.md` — 16 антипаттернов с реальной практики.
 - `sre-self-healing-pipeline.md` — замкнутый контур самовосстановления
   AI-сервисов (опубликовано ранее).
 
