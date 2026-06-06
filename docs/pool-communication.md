@@ -166,6 +166,16 @@ JSON-файлом**:
 короткое описание / ссылка на payload. Внутреннее поле `id` совпадает с
 именем файла.
 
+**Актуализация (2026-06):** (1) текущий `TaskCreate` принимает ТОЛЬКО
+`subject`/`description`/`activeForm`/`metadata` и создаёт `status=pending`;
+`owner`/`status` — не его параметры (ставятся через `TaskUpdate`, см. ниже).
+(2) Внутренний `id` выдаётся как `max+1` по **живому** стору, поэтому после
+того как дворник унёс completed в архив, харнесс **переиспользует** id — один
+и тот же `id` может оказаться и в живом сторе, и в архиве (разные задачи). Свой
+сквозной номер вручную не веди и стор не сканируй — бери `id`, который вернул
+`TaskCreate`. (3) `metadata.display_id` на практике обычно пуст — `TASK-NNN`
+живёт прямо в `subject`.
+
 ### Инвариант top-level `owner` (критично)
 
 Hook `inject-inbox.ps1` фильтрует POOL INBOX **строго по top-level
@@ -174,20 +184,21 @@ Hook `inject-inbox.ps1` фильтрует POOL INBOX **строго по top-le
 
 Это значит:
 
-- Если `TaskCreate` вызван без `owner='<получатель>'` на верхнем уровне
-  — баннер получателя его не покажет, даже если payload в `.inbox/`
-  лежит и `metadata.to` корректно заполнен.
+- Если у задачи не выставлен top-level `owner='<получатель>'` (его ставит
+  `TaskUpdate(owner=…)` сразу после `TaskCreate`) — баннер получателя её не
+  покажет, даже если payload в `.inbox/` лежит и `metadata.to` корректно заполнен.
 - Получатель увидит `[POOL INBOX] <owner>: clean (0 pending)` и
   естественным образом задачу пропустит.
 
 **Минимальный шаблон отправки задачи соседу:**
 
 ```
-TaskCreate(
+# Текущий TaskCreate НЕ принимает owner — создаём задачу, затем ставим
+# top-level owner через TaskUpdate (его-то hook и фильтрует).
+id = TaskCreate(
   subject="TASK-<slug>: <короткий заголовок>",
   description="**От:** <ты>\n**Кому:** <сосед>\n\nПолный текст: `.inbox/<pool-id>/TASK-<slug>.md`",
   activeForm="<глагол в активной форме у получателя>",
-  owner="<сосед>",                              # ← КРИТИЧНО: top-level
   metadata={
     "from": "<ты>",
     "to": "<сосед>",
@@ -195,6 +206,7 @@ TaskCreate(
     "payload_path": ".inbox/<pool-id>/TASK-<slug>.md"
   }
 )
+TaskUpdate(taskId=id, owner="<сосед>")          # ← КРИТИЧНО: top-level owner
 ```
 
 Эта грабля воспроизводилась в живых pool'ах многократно — peer'ы кладут

@@ -504,7 +504,7 @@ while ($true) {
 
 **Обязателен для любого пула** (в отличие от опционального watcher'а §4.5). Причина — в [Pool Communication §«Lifecycle и накопление completed»](pool-communication.md): встроенная система задач Claude Code инжектит в контекст **весь** список `list_id` почти каждый ход, **включая `completed`** и **без фильтра по `owner`**; в текущих сборках `completed` файл не удаляет, completed копятся, и список на сотни задач съедает 10–15k токенов/ход у каждого peer'а. Выключить только напоминание нельзя. Рычаг — держать живой список коротким.
 
-Дворник переносит (move, не delete → обратимо) `status=completed` старше `-MinAgeHours` из `~/.claude/tasks/<list>/` в соседний `~/.claude/tasks/<list>-archive/` (архив — не `list_id`, харнесс его не инжектит). Read-only по активным; нечитаемые/mid-write пропускает; safe при гонке с CLI.
+Дворник переносит (move, не delete → обратимо) `status=completed` старше `-MinAgeHours` из `~/.claude/tasks/<list>/` в соседний `~/.claude/tasks/<list>-archive/` (архив — не `list_id`, харнесс его не инжектит). Read-only по активным; нечитаемые/mid-write пропускает; safe при гонке с CLI. **Collision-safe:** харнесс переиспользует id после архивации (`max+1` по усохшему живому стору), поэтому существующий архивный `<id>.json` не перезатирается — клон уезжает как `<id>.dupN.json`.
 
 Вызывается автоматически из `pool-launch.ps1` (блок «Task-store hygiene» в §3) при старте/резюме каждой сессии, `-ListId $env:CLAUDE_CODE_TASK_LIST_ID` → чистит только пул этой сессии. Однократно на запуск; общий список подрезает старт любого peer'а. Разовая большая чистка — вручную `-MinAgeHours 0`, затем `/compact` открытым сессиям.
 
@@ -517,7 +517,10 @@ while ($true) {
 # Safety: only status=completed older than -MinAgeHours are moved (recent completions
 # stay so a peer can still TaskGet what it just closed); unparseable/mid-write files are
 # skipped; move (not delete) -> reversible; a Move that races a CLI write just retries
-# next run. The archive dir is a sibling, NOT a subdir of the list dir, and its name is
+# next run. Collision-safe: the harness REUSES ids after archiving (max+1 over the
+# shrunken live store, blind to the archive), so live and archive can clash; an existing
+# archived <id>.json is never overwritten -> the clone is archived as <id>.dupN.json.
+# The archive dir is a sibling, NOT a subdir of the list dir, and its name is
 # not a list_id any session uses -> the harness never injects it.
 
 param(
@@ -552,8 +555,22 @@ Get-ChildItem -Path $src -Filter '*.json' -File -ErrorAction SilentlyContinue | 
     }
     if ($task.status -ne 'completed') { return }
     if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+
+    # Collision-safe destination: never overwrite an id already in the archive
+    # (the harness reuses ids after archiving, so live and archive can clash).
+    $destPath = Join-Path $dst $file.Name
+    if (Test-Path -LiteralPath $destPath) {
+        $stem = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+        $ext  = [System.IO.Path]::GetExtension($file.Name)
+        $n = 1
+        do {
+            $destPath = Join-Path $dst ('{0}.dup{1}{2}' -f $stem, $n, $ext)
+            $n++
+        } while (Test-Path -LiteralPath $destPath)
+    }
+
     try {
-        Move-Item -LiteralPath $file.FullName -Destination (Join-Path $dst $file.Name) -Force -ErrorAction Stop
+        Move-Item -LiteralPath $file.FullName -Destination $destPath -ErrorAction Stop
         $moved++
     } catch {
         $failed++   # likely a concurrent CLI write -> skip, retry next run
