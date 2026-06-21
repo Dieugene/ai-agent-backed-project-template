@@ -27,10 +27,12 @@ Developer, Reviewer **архивированы** — Tech Lead закрывае�
 
 - **Plain monorepo** — общая папка для visibility, без координации между
   сессиями. Default для нового workspace.
-- **Pool monorepo** — то же + слой координации через Tasks API +
-  `.inbox/`-mailbox + UserPromptSubmit-hook. Используется когда несколько
-  сессий должны обмениваться задачами без участия пользователя как
-  диспетчера. Полный стандарт — [Pool Communication](pool-communication.md).
+- **Pool monorepo** — то же + слой координации через **maildir pool-шину**
+  (общая команда `pool` поверх `<bus>`) + UserPromptSubmit-hook
+  (`pool hook`). Используется когда несколько сессий должны обмениваться
+  задачами без участия пользователя как диспетчера. Поднимается одной
+  командой-скаффолдером. Полный стандарт — [Pool
+  Communication](pool-communication.md).
 
 **Принцип границ:** агент читает что угодно в workspace (для контекста и
 согласования API), но пишет/коммитит только в своей рабочей папке.
@@ -135,17 +137,22 @@ Default для нового стартового workspace без общего �
 ├── 02_src/                                # ОПЦИОНАЛЬНО: общий код (характерно для B)
 │
 │   --- pool-only ---
-├── .inbox/                                # mailbox payload-файлов
-│   └── <pool-id>/                         # подкаталог на каждый pool
-│       └── TASK-NNN.md
+├── .bus/                                  # данные pool-шины (maildir; gitignored, ленивый)
+│   ├── <owner>/{tmp,new,cur}/             # личный «ящик» каждого owner'а
+│   ├── archive/                           # обработанные сообщения
+│   ├── .ledger/                           # ledger вотчера
+│   └── .watch/                            # heartbeat-lock вотчера
 ├── .claude/
-│   ├── hooks/inject-inbox.ps1             # UserPromptSubmit hook
-│   └── settings.local.json                # регистрация hook (gitignored)
+│   └── settings.local.json                # регистрация hook = pool-CLI 'hook' (gitignored)
+├── board-<name>.bat                       # открыть живую доску пула
 └── scripts/
     ├── pool-launch.ps1                    # auto-resume helper
-    ├── claude-<role>-<scope>.bat          # launcher на каждого агента
+    ├── archive-completed-tasks.ps1        # дворник ЛИЧНЫХ todo (Tasks API)
+    ├── claude-<role>-<scope>.bat          # launcher на каждого агента (у лида — авто-доска)
     └── README.md                          # справка по pool'ам и диагностика
 ```
+
+(Сама pool-CLI — одна общая копия на весь workspace, в пул НЕ копируется.)
 
 **Обязательно у каждого workspace:**
 
@@ -156,8 +163,8 @@ Default для нового стартового workspace без общего �
 
 - `00_docs/` — если есть общие стандарты или кросс-проектные ADR.
 - `02_src/` — если есть общий код. Характерно для варианта B.
-- Pool-инфраструктура (`.inbox/`, hooks, scripts) — только если включаем
-  pool-режим.
+- Pool-инфраструктура (`.bus/`, hook-регистрация, scripts) — только если
+  включаем pool-режим.
 
 ### `AGENTS.md` vs `CLAUDE.md`
 
@@ -201,7 +208,7 @@ Default для нового стартового workspace без общего �
 ├── 04_logs/                               # обычно gitignored
 └── _agent_pool_setup-<scope>.md           # ОПЦИОНАЛЬНО (только в pool-mode)
                                            # onboarding peer'а: owner ID,
-                                           # TASK_LIST_ID, peer-контекст, зоны
+                                           # POOL_BUS_ROOT, peer-контекст, зоны
 ```
 
 ### Нумерация и именование
@@ -241,25 +248,32 @@ Workspace-root не ведёт backlog — задачи привязаны к п
 
 **Что НЕ включено:**
 
-- Tasks API не используется как pool-store.
-- `.inbox/` нет.
+- Pool-шина (`.bus/`) не разворачивается.
 - Hook на UserPromptSubmit не нужен.
+- Сессии не знают друг о друге автоматически.
 
 ### B. Pool monorepo
 
-**Что добавляется поверх plain:**
+**Координация — через общую maildir pool-шину.** Сообщение = immutable-файл,
+адрес получателя = папка `<bus>/<owner>/new/`. Что добавляется поверх plain
+(несёт сам пул; pool-CLI — одна общая копия на весь workspace, не
+копируется):
 
-- `.inbox/<pool-id>/` — общий mailbox.
-- `.claude/hooks/inject-inbox.ps1` + регистрация в `settings.local.json`.
-- `scripts/pool-launch.ps1` + `scripts/claude-<role>-<scope>.bat` на каждого
-  агента.
+- `.bus/` — данные шины (maildir: `<owner>/{tmp,new,cur}/`, `archive/`,
+  `.ledger/`, `.watch/`). Создаётся лениво, gitignored.
+- `.claude/settings.local.json` с hook'ом `pool hook` (по абсолютному пути).
+- `scripts/pool-launch.ps1` + `scripts/archive-completed-tasks.ps1` (дворник
+  личных todo) + `claude-<role>-<scope>.bat` на каждого агента (у лида —
+  авто-доска); `board-<name>.bat`.
 - `CLAUDE.md` workspace-root с routing-таблицей `AGENT_OWNER` → папка.
 - `_agent_pool_setup-<scope>.md` в каждой рабочей папке.
-- env vars `AGENT_OWNER` и `CLAUDE_CODE_TASK_LIST_ID`, выставляемые
-  wrapper'ом.
+- env vars `AGENT_OWNER`, `POOL_BUS_ROOT`, `POOL_INBOX_QUIET=1` (и
+  `CLAUDE_CODE_TASK_LIST_ID` под личные todo), выставляемые wrapper'ом.
 
-Подробности механики — [Pool Communication](pool-communication.md).
-Подъём intra-project pool с нуля — [Intra-Project Pool Recipe](intra-project-pool-recipe.md).
+**Создание pool — одной командой:** скаффолдер из спеки генерит весь
+bus-native каркас. Подробности механики — [Pool
+Communication](pool-communication.md). Подъём intra-project pool с нуля —
+[Intra-Project Pool Recipe](intra-project-pool-recipe.md).
 
 ---
 
@@ -271,35 +285,37 @@ Workspace-root не ведёт backlog — задачи привязаны к п
 - Один подпроект как inter-project pool, другие — без pool.
 - Разные команды владеют разными pool'ами.
 
+На maildir-шине изоляция структурно проще, чем в Tasks-API-эпоху: у каждого
+пула — свой `BusRoot` (`POOL_BUS_ROOT`, обычно `<repo>\.bus`); hook
+`pool hook` сам читает `<bus>/<owner>/new/` по env, отдельных под-каталогов
+под адресацию не нужно (получатель = папка owner внутри своей шины).
+
 ### Что общее у всех pool'ов
 
 | Компонент | Почему общий |
 |-----------|--------------|
-| `.claude/hooks/inject-inbox.ps1` | Хук читает только env vars, фильтрует `~/.claude/tasks/<TASK_LIST_ID>/*.json`. Не знает ничего про конкретный pool. |
-| `.claude/settings.local.json` (блок `hooks.UserPromptSubmit`) | Один hook обслуживает любое число pool'ов. |
+| pool-CLI (`hook`/`send`/`watch`/...) | Одна общая копия на весь workspace; читает `$env:AGENT_OWNER` и `$env:POOL_BUS_ROOT`, не знает ничего про конкретный pool. В пулы не копируется. |
+| `.claude/settings.local.json` (блок `hooks.UserPromptSubmit`) | Один hook (`pool hook`) обслуживает любое число pool'ов — изоляция через `POOL_BUS_ROOT`. |
 | `scripts/pool-launch.ps1` | Принимает `$SessionTitle` параметром. Универсальный. |
 
 ### Что естественно изолировано
 
 | Компонент | Изоляция |
 |-----------|----------|
-| `~/.claude/tasks/<TASK_LIST_ID>/` | Tasks API хранит per-`TASK_LIST_ID`. Pool A пишет в `foo-pool/`, pool B — в `bar-pool/`. Не пересекаются. |
+| `<bus>` (`POOL_BUS_ROOT`) | Каждый пул — своя шина (свой `.bus/`). Pool A работает по `<repo-A>\.bus`, pool B — по `<repo-B>\.bus`. Адрес = папка owner внутри своей шины; пулы не пересекаются. |
+| `~/.claude/tasks/<TASK_LIST_ID>/` | Tasks API (личные todo) хранит per-`TASK_LIST_ID`. Pool A пишет в `foo-pool/`, pool B — в `bar-pool/`. Не пересекаются. |
 
 ### Что изолировать вручную
 
 | Компонент | Природа коллизии | Решение |
 |-----------|------------------|---------|
-| `.inbox/` payload-файлы | Общий `.inbox/` → имена `TASK-001.md` двух pool'ов столкнутся | Подкаталог `.inbox/<pool-id>/TASK-NNN.md` |
 | `scripts/claude-*.bat` | По одному батнику на агента | Convention: `claude-<role>-<scope>.bat`, scope включает имя pool'а |
 | `CLAUDE.md` routing | Маппинг растёт по мере pool'ов | Разделы на каждый pool в одном файле |
 | `_agent_pool_setup.md` | В intra-project pool в одной папке N агентов | Суффикс scope: `_agent_pool_setup-<scope>.md` |
 
-### Затраты на «лишнюю» мульти-pool layout
-
-Для workspace с одним pool — выглядит избыточно: одна папка-обёртка,
-один уровень в `payload_path`. Но миграция позднее дороже. Если есть хоть
-какая-то вероятность появления второго pool — закладывайте
-`.inbox/<pool-id>/` сразу.
+Канонический способ поднять каждый пул — скаффолдер (генерит bus-native
+каркас, свой `.bus/`); коллизий имён сообщений между пулами не бывает —
+адресация по папке owner внутри своей шины.
 
 ---
 
@@ -324,11 +340,10 @@ Claude Code всегда стартует с cwd `<workspace-root>`. Это:
 - **Читать** что угодно в workspace: соседние подпроекты, для
   согласования API, поиска похожих паттернов.
 - **Писать** (создавать файлы, модифицировать, коммитить) — только в
-  своей рабочей папке (`01_projects/<свой-scope>/`) и в общий `.inbox/`
-  в pool-режиме.
+  своей рабочей папке (`01_projects/<свой-scope>/`).
 - Категорически **не** модифицировать файлы соседнего подпроекта или
   чужого peer'а в intra-project pool. Изменение в чужой зоне →
-  координация через pool-Tasks.
+  координация через `pool send -To <сосед>`.
 
 ### Cross-boundary writes — осторожно
 
@@ -336,7 +351,7 @@ Claude Code всегда стартует с cwd `<workspace-root>`. Это:
   workspace-root.
 - Не использовать `git commit -a` без явных pathspec'ов в общих
   директориях.
-- Pool-mailbox `.inbox/` коммитится отдельно в workspace-root репо.
+- Служебный `.bus/` (шина) — gitignored, в коммиты не попадает.
 
 ### Стандарты не дублируются в подпроекты
 
@@ -405,8 +420,16 @@ git commit -m "Initial <name> workspace"
 
 ### Шаг 5 (опционально). Pool
 
-Когда появились сигналы — см. [Intra-Project Pool Recipe](intra-project-pool-recipe.md)
-или соответствующий runbook для inter-project pool.
+Когда появились сигналы — **канонический способ** поднять пул (bus-native, на
+общей maildir-шине) — одна команда-скаффолдер из спеки (`spec.json`: имя
+пула, лид, заголовок, роли `owner`+`label`). Он генерит весь каркас: `.bus/`
+(ленивый maildir), `.claude/settings.local.json` с hook'ом `pool hook`,
+`CLAUDE.md` (routing по `AGENT_OWNER`), `claude-<owner>.bat` на каждую роль (у
+лида — авто-доска), `board-<name>.bat`, `_agent_pool_setup-<owner>.md`,
+`scripts/{pool-launch, archive-completed-tasks}`, каркас `00_docs/`. Сама
+pool-CLI НЕ копируется. Пошагово, smoke-test и intra-project нюансы — [Pool
+Communication](pool-communication.md) и [Intra-Project Pool
+Recipe](intra-project-pool-recipe.md).
 
 ---
 
@@ -466,7 +489,7 @@ Tech Lead, потому что роли не наполняются.
 ## 10. Связанные документы
 
 - [Pool Communication](pool-communication.md) — координация через
-  Tasks API + mailbox + hook.
+  maildir pool-шину + hook.
 - [Tech Lead Mode](tech-lead-mode.md) — рабочий режим единственной
   активной роли.
 - [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md) — pool-инфра

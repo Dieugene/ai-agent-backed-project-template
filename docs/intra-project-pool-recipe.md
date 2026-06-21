@@ -6,11 +6,20 @@
 - В подпроекте несколько направлений (frontend / backend / qa / architect),
   которые могут идти параллельно.
 - Уже есть [pool-инфра workspace](wrapper-and-hook-scripts.md)
-  (`pool-launch.ps1`, `inject-inbox.ps1`, `settings.local.json`).
+  (pool-launch helper, общая pool-CLI, `settings.local.json` с hook'ом).
 - Появилась нагрузка, при которой один Tech Lead уже не успевает.
 
 Если pool-инфры ещё нет — сначала [Workspace
 Organization §8](workspace-organization.md#8-bootstrap-нового-workspace).
+
+> ## ⚡ Координация — на maildir pool-шине
+>
+> Координация в пуле идёт через общую команду `pool` (pool-CLI) поверх
+> шины `<bus>` (`POOL_BUS_ROOT`): сообщение = immutable-файл, адрес = папка
+> `<bus>/<owner>/new/`. Hook на входящие — `pool hook`. **Канонический путь
+> поднять пул — скаффолдер** (одна команда генерит весь bus-native каркас
+> из спеки, §2.0); ручная сборка ниже — fallback для существующего
+> нестандартного монорепо. Личные todo остаются на Tasks API.
 
 > Все идентификаторы — placeholder'ы. Сценарий ниже описывает поднятие
 > пула из 4 peer'ов в подпроекте `<sub>`: `architect-<sub>`,
@@ -46,8 +55,10 @@ qa). Усложнение — по мере появления потребно�
   `<workspace-root>/scripts/` если решили централизованно).
 - **Setup:** `_agent_pool_setup-<role>.md` (или `<role>-<spec>` если
   несколько peer'ов одной роли).
-- **TASK_LIST_ID:** `<sub>-pool` (например `foo-pool`).
-- **Mailbox subdir:** `.inbox/<sub>-pool/` в `<workspace-root>/.inbox/`.
+- **Шина:** `POOL_BUS_ROOT = <bus>` (обычно `<workspace-root>\.bus`) —
+  одна на весь workspace; ящик каждого peer'а — `<bus>/<owner>/new/`.
+- **TASK_LIST_ID:** `<sub>-pool` — каталог **личных** todo (Tasks API), не
+  координация.
 
 ### 1.3 Зоны записи
 
@@ -68,15 +79,42 @@ qa). Усложнение — по мере появления потребно�
 
 ---
 
-## 2. Bootstrap (шаг за шагом)
+## 2. Bootstrap
 
-### Шаг 1. Подкаталог mailbox
+### 2.0. Основной путь — скаффолдер (одна команда)
+
+**Канонический способ поднять bus-native пул — скаффолдер**: одна команда
+генерит весь каркас из спеки (`spec.json`: имя пула, лид, заголовок, список
+ролей `owner`+`label`).
 
 ```
-mkdir <workspace-root>\.inbox\<sub>-pool
+<pool-scaffolder> -Spec <spec.json>
 ```
 
-И добавить `.gitkeep` чтобы папка попала в git.
+Что он генерит (всё уже рабочее): `<bus>` (ленивый maildir),
+`.claude/settings.local.json` с hook'ом `pool hook`, `CLAUDE.md` (routing по
+`AGENT_OWNER`), `claude-<owner>.bat` на каждую роль (env
+`AGENT_OWNER`/`CLAUDE_CODE_TASK_LIST_ID`/`POOL_BUS_ROOT`/`POOL_INBOX_QUIET`;
+у лида — авто-доска), `board-<name>.bat`, `_agent_pool_setup-<owner>.md`,
+`scripts/{pool-launch, archive-completed-tasks}`, каркас `00_docs/`. Сама
+pool-CLI НЕ копируется — одна общая копия на весь workspace.
+
+INFRA генерится полностью рабочей; ДОМЕН (миссии ролей, зоны, конвейер)
+остаётся TODO-заглушками — заполняется после скаффолдинга (зоны — §1.3,
+smoke-test — §2 «Шаг 7-8»). Для intra-project pool скаффолдер задаёт каркас;
+зоны записи внутри общей папки подпроекта (§1.3) всё равно прописываются
+вручную.
+
+### 2.1. Ручной fallback (нетиповой монорепо) — шаг за шагом
+
+Если скаффолдер не подходит (вписываешь pool-слой в уже существующий
+нестандартный монорепо) — собери каркас вручную.
+
+### Шаг 1. Шина
+
+`<bus>` (`POOL_BUS_ROOT`, обычно `<workspace-root>\.bus`) создаётся **лениво**
+самой pool-CLI при первом `pool send` — заранее каталоги создавать не нужно.
+Добавь `.bus/` в `.gitignore` workspace-root (служебное состояние шины).
 
 ### Шаг 2. Сводный routing в workspace CLAUDE.md
 
@@ -94,7 +132,8 @@ mkdir <workspace-root>\.inbox\<sub>-pool
 | `backend-<sub>` | `01_projects/<sub>/claude-backend-<sub>.bat` | `01_projects/<sub>/_agent_pool_setup-backend.md` |
 | `qa-<sub>` | `01_projects/<sub>/claude-qa-<sub>.bat` | `01_projects/<sub>/_agent_pool_setup-qa.md` |
 
-Mailbox: `.inbox/<sub>-pool/`. TASK_LIST_ID: `<sub>-pool`.
+Шина: `POOL_BUS_ROOT = <bus>` (ящик каждого — `<bus>/<owner>/new/`).
+TASK_LIST_ID: `<sub>-pool` (личные todo).
 ```
 
 ### Шаг 3. CLAUDE.md подпроекта — блок «Pool-режим (читать первым)»
@@ -141,11 +180,13 @@ Mailbox: `.inbox/<sub>-pool/`. TASK_LIST_ID: `<sub>-pool`.
 ```batch
 @echo off
 REM Pool wrapper: Frontend для подпроекта <sub>.
-REM Owner ID: frontend-<sub>. Pool: <sub>-pool.
+REM Owner ID: frontend-<sub>. Pool: <sub>-pool. Bus-native (maildir).
 REM Cwd = <workspace-root>. ProjectKey: <ProjectKey>.
 
 set AGENT_OWNER=frontend-<sub>
+set POOL_BUS_ROOT=<workspace-root>\.bus
 set CLAUDE_CODE_TASK_LIST_ID=<sub>-pool
+set POOL_INBOX_QUIET=1
 cd /d <workspace-root>
 powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\scripts\pool-launch.ps1" -SessionTitle "Frontend-Sub" -ProjectKey "<ProjectKey>"
 if errorlevel 1 pause
@@ -173,7 +214,7 @@ Onboarding в pool `<sub>-pool` как peer с <список других peer'�
 | Cwd | `<workspace-root>` (umbrella) |
 | Проектная папка | `<workspace-root>\01_projects\<sub>\` |
 | Зона записи | <конкретные подпапки 02_src/ или 00_docs/> |
-| Mailbox pool | `<workspace-root>\.inbox\<sub>-pool\` |
+| Шина (мой ящик) | `<bus>\<role>-<sub>\new\` (`POOL_BUS_ROOT = <bus>`) |
 | Launcher | `claude-<role>-<sub>.bat` |
 
 ## Контекст pool
@@ -200,17 +241,21 @@ Onboarding в pool `<sub>-pool` как peer с <список других peer'�
 
 ## Как отправить задачу соседу
 
-Канон pool (§4 стандарта) — два действия атомарно:
+Канон pool — одна команда (тело — в md-файл, `-BodyFile`):
 
-1. Положи payload в `.inbox/<sub>-pool/TASK-<slug>.md`.
-2. Вызови `TaskCreate` с **top-level `owner` = получатель**.
+```
+pool send -To <сосед> -From <role>-<sub> -Subject "<тема>" -BodyFile <файл.md>
+```
 
-См. [Pool Communication §4 — Инвариант top-level owner](<path>/pool-communication.md#инвариант-top-level-owner-критично).
+Сообщение атомарно появляется в `<bus>/<сосед>/new/` — никакого второго
+шага. Отчёт по входящей задаче — `pool reply -InReplyTo <id>` (не закрытие
+чужой задачи). См. [Pool Communication §4](<path>/pool-communication.md).
 
 ## Личные todo
 
-`TaskCreate(subject='...', owner='<role>-<sub>', metadata={ "kind": "personal" })`
-— не зашумляет POOL INBOX соседей.
+`TaskCreate(subject='...', metadata={ "kind": "personal" })` →
+`TaskUpdate(<id>, owner='<role>-<sub>')` — не зашумляет POOL INBOX соседей
+(координация идёт по шине, не по Tasks API).
 
 ## Как ты работаешь
 
@@ -237,34 +282,26 @@ Onboarding в pool `<sub>-pool` как peer с <список других peer'�
 
 1. По очереди (или параллельно) запустить wrapper-батники каждого peer'а.
 2. На первом запуске Claude Code может попросить одобрение нового hook'а
-   («Allow command: powershell ... inject-inbox.ps1?») — **Yes / Always
+   («Allow command: powershell ... pool ... hook?») — **Yes / Always
    allow for this project**.
 3. Попросить каждого peer'а вывести `<user-prompt-submit-hook>` —
    убедиться что баннер `[POOL INBOX] <owner>: clean (0 pending)`
-   появляется. Если `clean` — pool активен.
+   появляется (или тихо при `POOL_INBOX_QUIET=1`). Если `clean` — pool
+   активен.
 
 ### Шаг 8. Smoke-тест координации
 
-С одного peer'а отправить тестовую задачу соседу:
+С одного peer'а отправить тестовое сообщение соседу (тело — минимальный
+md-файл):
 
 ```
-TaskCreate(
-  subject="TASK-001: smoke test",
-  description="**От:** <self>\n**Кому:** <peer>\n\nПусть peer увидит эту задачу в баннере.",
-  activeForm="Получаю smoke-test",
-  owner="<peer>",
-  metadata={
-    "from": "<self>",
-    "to": "<peer>",
-    "kind": "task",
-    "payload_path": ".inbox/<sub>-pool/TASK-001.md"
-  }
-)
+pool send -To <peer> -From <self> -Subject "smoke test" -BodyFile <файл.md>
 ```
 
-Положить `.inbox/<sub>-pool/TASK-001.md` с минимальным содержанием.
-Открыть/возобновить сессию peer'а, проверить что баннер показывает 1
-pending. Если показывает — pool работает. Закрыть задачу `TaskUpdate(status='completed')`.
+Сообщение появится в `<bus>/<peer>/new/`. Открыть/возобновить сессию
+peer'а, проверить что баннер `[POOL INBOX]` показывает 1 pending и
+`pool mine` его видит. Если показывает — pool работает. Завершить:
+peer делает `pool claim -Id <id>` → `pool ack -Id <id>`.
 
 ---
 
@@ -290,9 +327,9 @@ Pull-модель бэклога — главное:
 - Dev-агенты при возобновлении сессии открывают `backlog.md`, вписывают
   себя в `Owner-claimed` → `wip`. После починки → `fixed`. QA при
   следующем прогоне → `verified` или возврат в `open`.
-- Для S1 разрешено продублировать как `TaskCreate(owner=<нужный>,
-  kind=qa-finding-critical)` — явный пинг. Для S2/S3 — только бэклог,
-  без Tasks API.
+- Для S1 разрешено продублировать явным пингом через шину: `pool send -To
+  <нужный> -From <qa-owner> -Subject "S1: ..." -BodyFile <ссылка на находку>`.
+  Для S2/S3 — только бэклог, без пинга.
 
 QA не пишет автотесты (Playwright/Vitest), не правит код dev-агентов, не
 трогает БД (только select для проверки состояния).
@@ -319,8 +356,8 @@ QA не пишет автотесты (Playwright/Vitest), не правит к�
    peer'ом этой же роли.
 
 **Что НЕ делать:** не править зону существующего peer'а «под нового» из
-parent-сессии. Если граница пересматривается — это `TaskCreate(owner='<тот
-peer>')` с обоснованием, не прямая правка его файлов.
+parent-сессии. Если граница пересматривается — это `pool send -To <тот
+peer>` с обоснованием, не прямая правка его файлов.
 
 ---
 
@@ -332,7 +369,7 @@ peer>')` с обоснованием, не прямая правка его фа
 1. **Не удалять** wrapper, setup, handoff — сохранить как контекст.
 2. В `<workspace-root>/CLAUDE.md` и в `01_projects/<sub>/CLAUDE.md`
    пометить: «`<owner>` — на паузе по решению пользователя YYYY-MM-DD.
-   `TaskCreate(owner='<owner>')` не отправлять».
+   `pool send -To <owner>` не отправлять».
 3. В `agent-pool-zones.md` пометить зону как «временно без owner'а».
 4. Если есть второй peer той же роли (`frontend2-<sub>` как замена) —
    завести его по recipe §4. Граница: новый peer берёт активные задачи,

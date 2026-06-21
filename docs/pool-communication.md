@@ -8,8 +8,35 @@
 
 > Это описание паттерна, не инструкция под конкретный проект. Все
 > идентификаторы (имена pool'ов, ролей, пути) заменены плейсхолдерами
-> вида `<workspace-root>`, `<pool-name>`, `<role>-<scope>`. Примеры из
-> практики обезличены.
+> вида `<workspace-root>`, `<bus>`, `<pool-name>`, `<role>-<scope>`.
+> Примеры из практики обезличены.
+
+> ## ⚡ Координация — на maildir pool-шине (с этой ревизии)
+>
+> Координация между сессиями теперь идёт по файловой **pool-шине** (maildir):
+> общая команда `pool` (одна общая копия pool-CLI на весь workspace) поверх
+> каталога-шины `<bus>` (`POOL_BUS_ROOT`). Сообщение = **immutable-файл**;
+> **адрес получателя = ПАПКА** `<bus>/<owner>/new/`; переходы (`new` → `cur`
+> → `archive`) = атомарный rename. Это заменяет прежнюю связку Tasks API +
+> `.inbox/`-mailbox + UserPromptSubmit-hook поверх Tasks-store.
+>
+> - **Координация:** `pool send` / `reply` / `inbox` / `claim` / `ack` /
+>   `mine` / `board` / `watch`.
+> - **Hook** на входящие — pool-CLI в режиме `hook` (читает
+>   `<bus>/<owner>/new/`, эмитит `[POOL INBOX]`). Заменяет старый
+>   `inject-inbox.ps1`.
+> - **Вотчер** — встроенный режим `watch` той же pool-CLI (ledger
+>   `<bus>/.ledger/seen-<owner>.txt`, lock `<bus>/.watch/lock-<owner>.txt`).
+>   Заменяет отдельные `wait-for-task.ps1` / `Get-PendingTasks.ps1`.
+> - **Новый пул** = скаффолдер (одна команда генерит весь bus-native
+>   каркас из спеки, см. §10).
+> - **Личные todo ОСТАЮТСЯ на Tasks API**
+>   (`TaskCreate(metadata={kind:"personal"})`) — это не устарело. Дворник
+>   личных todo тоже остаётся.
+>
+> Где ниже встречаются `~/.claude/tasks/<list>/`, `.inbox/`,
+> `TaskCreate`/`TaskUpdate` как **канал координации** — это legacy
+> Tasks-API-эпохи (оставлено для понимания старых пулов и истории решений).
 
 ---
 
@@ -44,35 +71,42 @@ digraph pool {
   rankdir=LR;
   node [shape=box, style=rounded];
 
-  ENV [label="1. Identity\nvia env vars\n(AGENT_OWNER,\nTASK_LIST_ID)"];
-  AUTORESUME [label="2. Auto-resume\nby display name\n(pool-launch.ps1)"];
+  ENV [label="1. Identity\nvia env vars\n(AGENT_OWNER,\nPOOL_BUS_ROOT)"];
+  AUTORESUME [label="2. Auto-resume\nby display name\n(pool-launch helper)"];
   ROUTING [label="3. Routing\nCLAUDE.md →\nworking folder"];
-  TASKS [label="4. Tasks API\nas shared inbox\n(per-TASK_LIST_ID)"];
-  MAILBOX [label="5. Shared mailbox\n.inbox/<pool-id>/\nTASK-NNN.md"];
-  HOOK [label="6. UserPromptSubmit\nhook → banner\n[POOL INBOX]"];
+  BUS [label="4. Maildir pool bus\n<bus>/<owner>/{new,cur}/\nimmutable file =\none message"];
+  CLI [label="5. pool-CLI\nsend/reply/claim/\nack/mine/board"];
+  HOOK [label="6. UserPromptSubmit\nhook (pool-CLI 'hook')\n→ banner [POOL INBOX]"];
 
-  ENV -> AUTORESUME -> ROUTING -> TASKS -> MAILBOX -> HOOK;
+  ENV -> AUTORESUME -> ROUTING -> BUS -> CLI -> HOOK;
 }
 ```
 
-1. **Идентичность** через env vars `AGENT_OWNER` и `CLAUDE_CODE_TASK_LIST_ID`,
-   выставляемые wrapper-батником на старте сессии.
+1. **Идентичность** через env vars `AGENT_OWNER` (кто я) и `POOL_BUS_ROOT`
+   (корень моей шины `<bus>`), выставляемые wrapper-батником на старте
+   сессии. (`CLAUDE_CODE_TASK_LIST_ID` тоже выставляется — но уже только
+   под **личные** todo, не координацию.)
 2. **Auto-resume по display name** — двойной клик по wrapper'у возвращает
    агента в его же conversation, не открывает свежую.
 3. **Routing**: `<workspace-root>/CLAUDE.md` (auto-loaded Claude Code'ом)
    маппит `AGENT_OWNER` → путь к рабочей папке.
-4. **Tasks API** для координации — общий per-task store
-   `~/.claude/tasks/<TASK_LIST_ID>/<id>.json`, разделяемый между сессиями
-   через одинаковый `CLAUDE_CODE_TASK_LIST_ID`.
-5. **Общий mailbox** `<workspace-root>/.inbox/<pool-id>/TASK-NNN.md` —
-   payload-файлы координации. Payload не двигается при смене owner.
-6. **Hook UserPromptSubmit** инжектит баннер `[POOL INBOX] <owner>: N
+4. **Maildir pool-шина** — каталог `<bus>` (`POOL_BUS_ROOT`). Сообщение =
+   один immutable-файл; **адрес получателя = ПАПКА** `<bus>/<owner>/new/`;
+   переходы (`new` → `cur` → `archive`) = атомарный rename. Все сессии
+   одного workspace работают по одному `<bus>`.
+5. **pool-CLI** — одна общая команда `pool` (один скрипт на весь
+   workspace, в пулы не копируется): `send` / `reply` доставляют сообщение
+   целиком, `claim` / `ack` ведут жизненный цикл, `mine` / `board`
+   показывают состояние. См. §4.
+6. **Hook UserPromptSubmit** = pool-CLI в режиме `hook` — читает
+   `<bus>/<owner>/new/` и инжектит баннер `[POOL INBOX] <owner>: N
    pending` перед каждым промптом пользователя.
 
 Без env vars (опора 1) и hook'а (опора 6) — pool вырождается в обычные
 независимые сессии. Без routing CLAUDE.md (опора 3) — агенты не находят
-свою рабочую папку. Без mailbox (опора 5) — координация деградирует до
-коротких записей в Tasks API, которые по `completed` теряют смысл сигнала (и копятся в сторе — см. ниже про дворник).
+свою рабочую папку. Шина (опора 4) + pool-CLI (опора 5) держат инвариант
+доставки структурно: сообщение = файл, адрес = папка получателя, так что
+«две половины» и мис-оунинг невозможны (см. §4).
 
 ---
 
@@ -91,7 +125,9 @@ Owner ID:
 - стабильный (не меняется между сессиями),
 - уникальный в рамках pool,
 - читаемый человеком,
-- используется одновременно как `owner` в Tasks API и в баннере hook'а.
+- = имя личного «ящика» в шине (`<bus>/<owner>/`), адрес для
+  `pool send -To <owner>` и фильтр баннера hook'а. (В Tasks API остаётся
+  как `owner` **личных** todo.)
 
 ### Display name
 
@@ -104,237 +140,175 @@ Owner ID:
 ### Передача в сессию
 
 ```
-cmd.exe   (set AGENT_OWNER=...; set CLAUDE_CODE_TASK_LIST_ID=...)
+cmd.exe   (set AGENT_OWNER=...; set POOL_BUS_ROOT=...; set CLAUDE_CODE_TASK_LIST_ID=...)
    ↓ child process
-powershell -NoProfile -File pool-launch.ps1
+powershell -NoProfile -File <pool-launch helper>
    ↓ child process
 claude.exe --resume <id>   (или --name <title>)
    ↓ child process (Claude Code spawns hook on UserPromptSubmit)
-hook inject-inbox.ps1
+hook = pool-CLI 'hook'   (читает <bus>/<owner>/new/)
 ```
 
 Все звенья наследуют env vars автоматически. Закрыл окно — переменные
-умирают, никаких глобальных эффектов.
+умирают, никаких глобальных эффектов. Без `AGENT_OWNER`/`POOL_BUS_ROOT`
+hook молчит, а `pool send/inbox/...` не знают, кто ты и где шина — агент
+работает как обычный Claude, без pool.
 
 Подробности wrapper'ов и hook'а — [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md).
 
 ---
 
-## 4. Tasks API: формат и инвариант top-level `owner`
+## 4. Pool-шина (maildir): формат и lifecycle координации
+
+### Layout шины
+
+Координация между сессиями идёт через **maildir-шину**: общая команда
+`pool` (pool-CLI) поверх каталога `<bus>` (`POOL_BUS_ROOT`). Один общий
+скрипт на весь workspace — в пулы НЕ копируется; все сессии одного
+workspace работают по одному `<bus>`.
+
+```
+<bus>/   (= $POOL_BUS_ROOT)
+├── <owner-A>/{tmp,new,cur}/   # личный ящик: new = входящие, cur = взятые в работу
+├── <owner-B>/{tmp,new,cur}/
+├── archive/                   # обработанные (после ack)
+├── .ledger/seen-<owner>.txt   # ledger вотчера (что уже показано)
+└── .watch/lock-<owner>.txt    # heartbeat-lock вотчера (singleton)
+```
+
+- **Сообщение = один immutable-файл.** id = `<unix-ms>-<hex>` (sortable,
+  лексикографически = хронологически; НИКОГДА не переиспользуется).
+  Записывается атомарно: сперва в `tmp/`, затем rename в
+  `<получатель>/new/`.
+- **Адрес получателя = ПАПКА** `<bus>/<owner>/new/`. Доставка — это и есть
+  появление файла в его `new/`. Никакого отдельного «объекта-задачи с полем
+  owner» — owner это каталог.
+- **Переходы — атомарный rename:** `new/` → `cur/` (claim, взял в работу)
+  → `archive/` (ack, завершил). Состояние видно всем сразу.
+
+Вручную файлы в шину не пишут — только через `pool` (он гарантирует
+атомарный `tmp`→`new` rename и UTF-8 без BOM для кириллицы). Тело — через
+`-BodyFile`; крупные материалы (пачки, спеки) кладут файлом в репозиторий
+подпроекта, в сообщении — ссылка на путь.
+
+### Команды (résumé; детали — §4.1 и Wrapper and Hook Scripts)
+
+| Действие | Команда |
+|----------|---------|
+| Поставить задачу / написать соседу | `pool send -To <peer> -From <self> -Subject "<тема>" -BodyFile <файл.md>` |
+| Ответить / отчитаться | `pool reply -To <отправитель> -From <self> -Subject "Re: ..." -InReplyTo <id> -BodyFile <файл.md>` |
+| Входящие (то, что в `new/`) | `pool inbox` (и баннер `[POOL INBOX]` каждый ход) |
+| Своя «тарелка»: `cur/` + `new/` | `pool mine` |
+| Взять в работу | `pool claim -Id <id>` |
+| Завершить (после ack соседа) | `pool ack -Id <id>` |
+| Доска пула / живая доска | `pool board` / `pool board -Show` |
+| Вотчер (опц., фоном) | `pool watch` (см. §7.5) |
+
+`Owner`/`BusRoot` в `inbox`/`claim`/`ack`/`mine` можно не передавать —
+берутся из env (`AGENT_OWNER`/`POOL_BUS_ROOT`).
+
+### 4.1 Lifecycle (на шине)
+
+1. **Постановка:** A → `pool send -To B -From A -Subject "..." -BodyFile
+   <файл.md>`. Файл атомарно появляется в `<bus>/B/new/`. Никакого второго
+   шага — одна команда доставляет целиком.
+2. **Принятие:** B видит задачу в `[POOL INBOX]` (hook, §7), читает её,
+   `pool claim -Id <id>` — задача переезжает в `<bus>/B/cur/` (взято в
+   работу).
+3. **Ответ:** B → `pool reply -To A -From B -Subject "Re: ..." -InReplyTo
+   <id> -BodyFile <файл.md>`. Свежее сообщение появляется в `<bus>/A/new/`
+   → у A срабатывает и `[POOL INBOX]`, и вотчер.
+4. **Завершение:** `pool ack -Id <id>` — задача из `cur/` уезжает в
+   `<bus>/archive/`. Аудит — `archive/` + git-история репозитория.
+
+### 4.2 Инвариант доставки — теперь его держит инструмент, а не дисциплина
+
+В прежней (Tasks-API) модели сообщение соседу требовало **двух половин**:
+payload-файл в `.inbox/` **И** объект-задача с правильным top-level
+`owner`. Забыл вторую половину — получатель ничего не видел: его hook
+фильтровал POOL INBOX строго по top-level `owner`, и payload в `.inbox/`
+оставался невидимым. Эта грабля воспроизводилась в живых пулах многократно
+(см. [Lessons Learned §1](lessons-learned.md)).
+
+На шине этого больше нет — **переформулировано структурно**:
+
+- **«Две половины» исчезли.** Сообщение = один файл, адрес = папка
+  получателя `<bus>/<owner>/new/`; одна команда `send` доставляет целиком.
+  Мис-оунинга не бывает — owner это каталог, а не поле, которое можно
+  забыть выставить.
+- **Отчёт = `reply`** (свежий id, кладётся в `new/` постановщика) → у него
+  срабатывает и `[POOL INBOX]`, и вотчер. **Не закрывай чужую задачу как
+  способ «отчитаться»** — этого механизма больше нет.
+- **id уникальны и НИКОГДА не переиспользуются** — проблема переиспользования
+  id старого Tasks-store (после архивации completed) ушла.
+- **`claim` атомарен:** кто первый `claim` — того задача; остальные получат
+  «уже взято».
+
+### 4.3 После перезапуска / `/compact`
+
+`inbox`/`[POOL INBOX]` показывает только **новое** (`new/`), НЕ твою работу
+в процессе. После возобновления выполни **`pool mine`** — он покажет `cur/`
+(взятое в работу) и `new/` (ожидающее). По задаче из `cur/` прочти её файл
+(путь печатает `mine`), продолжи, в конце `ack`. Это твоя «тарелка» —
+личный аналог Task UI.
+
+---
+
+## 5. Tasks API — ТОЛЬКО личные todo (не координация)
+
+Координация ушла на шину; Tasks API остаётся под **личные todo** агента
+(планирование внутри своей работы). Это НЕ устарело.
 
 ### Формат хранения
 
-В актуальном Claude Code Tasks API хранит **каждую задачу отдельным
-JSON-файлом**:
+Tasks API хранит **каждую задачу отдельным JSON-файлом**:
 
 ```
 ~/.claude/tasks/<TASK_LIST_ID>/
 ├── 1.json              # одна задача = один файл
 ├── 2.json
-├── 7.json
 ├── .highwatermark      # счётчик последнего выданного ID
 └── .lock               # файл-замок для concurrency
 ```
 
 Никакого агрегатного `tasks.json` не существует (более старая публичная
 документация местами ошибочно описывает агрегатный формат — это уже не
-актуально).
+актуально). Поле в task-файле называется **`subject`** (не `title`);
+внутреннее поле `id` совпадает с именем файла. Текущий `TaskCreate`
+принимает ТОЛЬКО `subject`/`description`/`activeForm`/`metadata` и создаёт
+`status=pending`; `owner` — не его параметр, адресуется отдельным
+`TaskUpdate`.
 
-**Структура одного task-файла:**
+### Конвенция личного todo
 
-```json
-{
-  "id": "7",
-  "subject": "TASK-007: <короткое название>",
-  "description": "См. payload: .inbox/<pool-id>/TASK-007.md",
-  "activeForm": "<глагол в активной форме у получателя>",
-  "owner": "tech-lead-bar",
-  "status": "pending",
-  "blocks": [],
-  "blockedBy": [],
-  "metadata": {
-    "display_id": "TASK-007",
-    "from": "tech-lead-foo",
-    "to": "tech-lead-bar",
-    "kind": "coord",
-    "payload_path": ".inbox/<pool-id>/TASK-007.md"
-  }
-}
-```
-
-Поле в task-файле называется **`subject`** (не `title`), `description` —
-короткое описание / ссылка на payload. Внутреннее поле `id` совпадает с
-именем файла.
-
-**Актуализация (2026-06):** (1) текущий `TaskCreate` принимает ТОЛЬКО
-`subject`/`description`/`activeForm`/`metadata` и создаёт `status=pending`;
-`owner`/`status` — не его параметры (ставятся через `TaskUpdate`, см. ниже).
-(2) Внутренний `id` выдаётся как `max+1` по **живому** стору, поэтому после
-того как дворник унёс completed в архив, харнесс **переиспользует** id — один
-и тот же `id` может оказаться и в живом сторе, и в архиве (разные задачи). Свой
-сквозной номер вручную не веди и стор не сканируй — бери `id`, который вернул
-`TaskCreate`. (3) `metadata.display_id` на практике обычно пуст — `TASK-NNN`
-живёт прямо в `subject`.
-
-### Инвариант top-level `owner` (критично)
-
-Hook `inject-inbox.ps1` фильтрует POOL INBOX **строго по top-level
-`owner`**. Поля `metadata.to`, `metadata.assignee`, `metadata.owner` он
-**не смотрит**.
-
-Это значит:
-
-- Если у задачи не выставлен top-level `owner='<получатель>'` (его ставит
-  `TaskUpdate(owner=…)` сразу после `TaskCreate`) — баннер получателя её не
-  покажет, даже если payload в `.inbox/` лежит и `metadata.to` корректно заполнен.
-- Получатель увидит `[POOL INBOX] <owner>: clean (0 pending)` и
-  естественным образом задачу пропустит.
-
-**Минимальный шаблон отправки задачи соседу:**
-
-```
-# Текущий TaskCreate НЕ принимает owner — создаём задачу, затем ставим
-# top-level owner через TaskUpdate (его-то hook и фильтрует).
-id = TaskCreate(
-  subject="TASK-<slug>: <короткий заголовок>",
-  description="**От:** <ты>\n**Кому:** <сосед>\n\nПолный текст: `.inbox/<pool-id>/TASK-<slug>.md`",
-  activeForm="<глагол в активной форме у получателя>",
-  metadata={
-    "from": "<ты>",
-    "to": "<сосед>",
-    "kind": "task",
-    "payload_path": ".inbox/<pool-id>/TASK-<slug>.md"
-  }
-)
-TaskUpdate(taskId=id, owner="<сосед>")          # ← КРИТИЧНО: top-level owner
-```
-
-Эта грабля воспроизводилась в живых pool'ах многократно — peer'ы кладут
-payload в `.inbox/`, но `TaskCreate` либо не вызывают вовсе, либо
-ставят получателя только в `metadata.to`. Лечится правилом в
-[`_agent_pool_setup-<owner>.md`](intra-project-pool-recipe.md#agent-pool-setup)
-каждого peer'а + периодической ревизией pending-записей без top-level
-`owner`. Подробнее — [Lessons Learned §1](lessons-learned.md).
-
-### Lifecycle и накопление `completed` (ВАЖНО для контекста)
-
-```
-TaskCreate              → status: pending      (файл создан)
-TaskUpdate(in_progress) → status: in_progress  (файл живёт)
-TaskUpdate(completed)   → status: completed     (файл ОСТАЁТСЯ и копится)
-```
-
-**Поведение зависит от версии Claude Code — проверьте на своей.** Ранние
-сборки физически удаляли файл по `completed`. В текущих (наблюдалось 2026-06)
-**completed-задачи остаются файлами в сторе и накапливаются бесконечно** — в
-живом пуле быстро набирается сотня-другая completed на десяток активных.
-
-**Почему это критично — встроенная инъекция всего списка в контекст.** Сам
-Claude Code (НЕ ваш hook) почти каждый ход инжектит системным напоминанием
-**весь список `list_id`** — **включая completed** и **без фильтра по `owner`**
-(поле `owner` — ваша конвенция, харнесс про неё не знает). Каждый агент общего
-пула получает дамп ВСЕХ задач всех соседей: сотни строк ≈ 10–15k токенов на ход,
-и это копится в диалоге. Выключить только напоминание, сохранив инструменты
-`TaskCreate`/`TaskList`, **нельзя** (`CLAUDE_CODE_ENABLE_TASKS=0` рубит и
-инструменты). Единственный рычаг — **держать живой список коротким**.
-
-⇒ **В пуле обязателен «дворник», архивирующий completed.** Скрипт-эталон и
-интеграция в launcher — [Wrapper and Hook Scripts §4.6](wrapper-and-hook-scripts.md).
-Кратко: перенос (move, не delete → обратимо) `status=completed` старше N часов
-из `~/.claude/tasks/<list>/` в соседний `~/.claude/tasks/<list>-archive/` (архив
-— не `list_id`, харнесс его не инжектит); вызывается из `pool-launch.ps1` при
-старте каждой сессии, чистит только пул этой сессии.
-
-- **Persistent record координации** = payload-файлы `.inbox/<pool-id>/TASK-NNN.md`
-  + git-история workspace-root. Архив — разгрузка контекста, не источник истины.
-- **Tasks API** = эфемерный inbox-сигнал «сейчас на тебе висит вот это»; completed
-  считать «закрыто», даже если файл физически дожил до архива.
-
-Если нужна аудитория «когда что было закрыто» — в git-логе, не в Tasks API.
-
-### Личные todo агента
-
-| `metadata.kind` | Назначение |
-|-----------------|-----------|
-| `"personal"` | Личный todo агента — собственный шаг в своей работе. **Hook фильтрует такие из POOL INBOX баннера соседей.** |
-| `"coord"` (или поле опущено при наличии `from`/`to`) | Координационная задача между агентами. |
-
-Пример:
+`metadata.kind="personal"` → такой todo не зашумляет `[POOL INBOX]`
+соседей (координацию они получают из шины, не из Tasks API).
 
 ```
 TaskCreate(
   subject="Разобрать модуль X",
-  description="Личный шаг в TASK-005: review.",
-  owner="<self>",
+  description="Личный шаг внутри моей текущей работы.",
   metadata={ "kind": "personal" }
 )
+→ TaskUpdate(<вернувшийся id>, owner="<self>")
 ```
 
-Hook этот тикет в чужом баннере не покажет, но `TaskList(owner='<self>')`
-агенту вернёт — рабочий аналог `TodoWrite` для личного планирования
-внутри pool'а.
+`TaskList(owner='<self>')` вернёт их тебе — рабочий аналог `TodoWrite` для
+личного планирования.
 
----
+### Накопление `completed` и дворник (остаётся под личные todo)
 
-## 5. Общий mailbox `.inbox/`
+`TaskUpdate(completed)` файл НЕ удаляет — completed копится. Claude Code
+почти каждый ход инжектит системным напоминанием **весь** список `list_id`
+(включая completed, без фильтра по `owner`) — раздувает контекст. Поэтому
+остаётся **дворник** `archive-completed-tasks.ps1`: переносит
+`status=completed` старше N часов из `~/.claude/tasks/<list>/` в соседний
+`~/.claude/tasks/<list>-archive/` (move, обратимо; collision-safe).
+Вызывается из `pool-launch` при старте сессии. Эталон —
+[Wrapper and Hook Scripts §4.6](wrapper-and-hook-scripts.md).
 
-### Расположение
-
-`<workspace-root>/.inbox/<pool-id>/TASK-NNN.md`
-
-**Один каталог на pool**. При мульти-пулинге (несколько pool'ов в одной
-workspace) — подкаталог на каждый pool, чтобы имена `TASK-NNN.md` не
-сталкивались. Все агенты pool'а читают и пишут туда напрямую. Payload
-не переезжает при смене owner — меняется только поле `owner` в Tasks API.
-
-### Имена файлов
-
-- `TASK-NNN.md` — исходная постановка.
-- `TASK-NNN-reply.md` — ответ.
-- `TASK-NNN-reply-2.md` — следующая итерация при необходимости.
-- `TASK-NNN-progress.md` — промежуточные заметки исполнителя (опц.).
-
-`NNN` = `metadata.display_id`, не внутренний Tasks-API `id` (см. §4
-про различие).
-
-### Шаблон payload
-
-```markdown
-# TASK-NNN: <короткое название>
-
-| Поле | Значение |
-|------|----------|
-| От | <owner-id отправителя> |
-| Кому | <owner-id получателя> |
-| Дата | YYYY-MM-DD |
-| Тип | feature / bug / handoff / reply / qa-finding-critical |
-| Связано | TASK-MMM (если есть) |
-
-## Контекст
-
-<Что и почему. 1-3 абзаца. Самодостаточно — получатель не должен догадываться.>
-
-## Запрос
-
-<Что конкретно нужно сделать или решить.>
-
-## Acceptance (если применимо)
-
-- [ ] AC-1: ...
-- [ ] AC-2: ...
-
-## Reply
-
-`.inbox/<pool-id>/TASK-NNN-reply.md` — после такого-то условия.
-
-— <owner-id отправителя>
-```
-
-### Git-обработка
-
-`.inbox/` лежит в parent-репо `<workspace-root>` (не в подпроекте). Если
-parent-репо без remote — payload-файлы коммитятся локально для истории.
-Подпроекты на `.inbox/` не покушаются — это общая зона.
+> **Важно:** дворник теперь чистит **только личные todo** — координация на
+> шине его не касается (у неё свой `archive/` внутри `<bus>`).
 
 ---
 
@@ -412,7 +386,7 @@ parent-репо без remote — payload-файлы коммитятся лок
 | Риск | Митигация |
 |------|-----------|
 | Git-конфликты: два peer'а редактируют один файл | Чёткие зоны в `agent-pool-zones.md`. Коммитить часто. Перед началом работы — проверять состояние. |
-| Размывание границ: «слегка зайти в чужое» | Дисциплина: любая правка вне своей зоны — через `TaskCreate(owner='<сосед>')`, не прямая правка. |
+| Размывание границ: «слегка зайти в чужое» | Дисциплина: любая правка вне своей зоны — через `pool send -To <сосед>`, не прямая правка. |
 | Worktree-изоляция недоступна отдельному peer'у | Один worktree — на весь подпроект. Если peer использует `superpowers:using-git-worktrees`, остальные ждут возврата. |
 | Контекст-конкуренция в общей `02_src/` | Каждый peer при чтении видит и свою зону, и зоны соседей — плюс для интеграции, риск shallow understanding. В `_agent_pool_setup` явно перечислять «свой код = X, остальное — read-only context». |
 
@@ -421,38 +395,50 @@ Recipe](intra-project-pool-recipe.md).
 
 ---
 
-## 7. UserPromptSubmit hook
+## 7. UserPromptSubmit hook (pool-CLI `hook`)
 
 ### Цель
 
 Перед каждым промптом пользователя — вставить в контекст сессии баннер с
-pending-задачами для текущего агента. Снимает с агента дисциплинарную
-нагрузку «не забыть проверить inbox».
+входящими (`new/`) сообщениями для текущего агента. Снимает с агента
+дисциплинарную нагрузку «не забыть проверить inbox».
+
+### Где живёт
+
+Hook — **подкоманда общей pool-CLI** (`pool ... hook`), а не отдельный
+скрипт. Отдельный hook-файл в пул **не копируется**. Регистрация — в
+`<workspace-root>/.claude/settings.local.json` (gitignored), путь к
+pool-CLI абсолютный. Полный пример регистрации и кода —
+[Wrapper and Hook Scripts](wrapper-and-hook-scripts.md). Это заменяет
+прежний `inject-inbox.ps1`.
 
 ### Поведение
 
-1. Читает `$env:AGENT_OWNER` и `$env:CLAUDE_CODE_TASK_LIST_ID`.
+1. Читает `$env:AGENT_OWNER` и `$env:POOL_BUS_ROOT`.
 2. Если хотя бы одна не задана — выходит молча (`exit 0`). Pool неактивен,
    не шумим в контексте.
-3. Перебирает `~/.claude/tasks/<TASK_LIST_ID>/*.json`.
-4. Фильтрует: `status == 'pending'` И `owner == $AGENT_OWNER` И
-   `metadata.kind != 'personal'`.
-5. Эмитит баннер в stdout, который Claude Code оборачивает в блок
-   `<user-prompt-submit-hook>` и инжектит в контекст модели.
+3. Читает `<bus>/<owner>/new/` (входящие, ещё не взятые в работу).
+4. Эмитит баннер в stdout (id sortable — старшее сверху), который Claude
+   Code оборачивает в блок `<user-prompt-submit-hook>` и инжектит в
+   контекст модели.
 
 Пример вывода:
 
 ```
 [POOL INBOX] tech-lead-foo: 2 pending
-- 7 (from tech-lead-bar): TASK-007: ...
-  payload: .inbox/<pool-id>/TASK-007.md
-- 12 (from qa-foo): TASK-012: ...
-  payload: .inbox/<pool-id>/TASK-012.md
-Details: TaskList(owner='tech-lead-foo', status='pending')
+ - <id> (from tech-lead-bar): <тема>
+ - <id> (from qa-foo): <тема>
+Take: pool claim -Id <id>
 ```
 
-При 0 pending — `[POOL INBOX] tech-lead-foo: clean (0 pending)` (это
-диагностический сигнал, что pool активен и hook сработал).
+При 0 входящих — `[POOL INBOX] tech-lead-foo: clean (0 pending)` (это
+диагностический сигнал, что pool активен и hook сработал). Чтобы заглушить
+пустой баннер — `$env:POOL_INBOX_QUIET=1` (стоит в wrapper'ах по
+умолчанию).
+
+> Баннер показывает только `new/` (входящее, не взятое). То, что ты уже
+> взял в работу (`cur/`), там НЕ показывается — после возобновления/`/compact`
+> выполни `pool mine` (§4.3).
 
 ### Discovery: walk-up НЕ работает
 
@@ -478,27 +464,16 @@ ancestor-директорий **не подхватываются** автома
 
 `--dangerously-skip-permissions` **НЕ** обходит подтверждение нового
 hook'а — это отдельный security gate. На первом запуске Claude Code
-покажет prompt: «Allow command: powershell ... inject-inbox.ps1?». Без
+покажет prompt: «Allow command: powershell ... pool ... hook?». Без
 одобрения hook не выполняется. На втором промпте — баннер появится сам.
 
-### UTF-8 для кириллицы
+### UTF-8 для кириллицы — уже внутри pool-CLI
 
-На Windows hook крутится в Windows PowerShell 5.1. По умолчанию её
-stdout кодируется в OEM/ANSI — кириллический баннер приходит к Claude
-Code в виде mojibake. В начале hook'а обязательно:
-
-```powershell
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$OutputEncoding           = [System.Text.UTF8Encoding]::new($false)
-```
-
-И при чтении task-файлов:
-
-```powershell
-Get-Content -Path $_.FullName -Raw -Encoding UTF8 -ErrorAction Stop
-```
-
-Полный рабочий пример скрипта — [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md).
+На Windows hook крутится в Windows PowerShell 5.1, чей stdout по умолчанию
+кодируется в OEM/ANSI — кириллический баннер пришёл бы к Claude Code в виде
+mojibake. **pool-CLI сам выставляет UTF-8** на выводе и читает файлы шины
+как UTF-8 — отдельно фиксить (как в старом кастомном hook'е) не нужно.
+Полный рабочий пример — [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md).
 
 ---
 
@@ -514,31 +489,30 @@ Get-Content -Path $_.FullName -Raw -Encoding UTF8 -ErrorAction Stop
 
 ### Именование: слово «watcher» зарезервировано за inbox-watcher'ом
 
-Под «watcher» в пуле понимается **только** этот push-watcher на входящие задачи (`wait-for-task.ps1`) — **общее правило для всех агентов**, включая тех, кому он не подключён.
+Под «watcher» в пуле понимается **только** этот push-watcher на входящие задачи (`pool watch`) — **общее правило для всех агентов**, включая тех, кому он не подключён.
 
 Любые **доменные** фоновые сторожа, которые агент заводит под свои нужды (ждать новый прогон, появление файла, внешнее событие), **нельзя** называть «watcher» в user-facing выводе. Иначе путаница: пользователь видит «висящий» процесс с надписью `WATCHER` и считает, что взведён нотификатор задач, хотя это другое. Реальный случай: агент запустил доменный сторож прогонов, печатавший `WATCHER armed`, — пользователь принял его за task-watcher и решил, что тот «не сработал», хотя inbox-watcher просто не был взведён.
 
 Правило:
 - слово «watcher» (в баннерах, логах, `print`, видимых пользователю именах процессов) — **только** за inbox-watcher'ом на задачи;
 - доменные сторожа называть иначе: `RUN-WATCHER`, `batch-watcher`, `run-sentinel`, `*-poller` и т.п.;
-- единственный признак «inbox-watcher жив» — **свежий** `lock-<owner>.txt` в `.watcher-state/`; «висит фоновый процесс» ≠ «взведён inbox-watcher». При жалобе «watcher не сработал» — первым делом проверять свежесть лока, а не любой фоновый процесс.
+- единственный признак «inbox-watcher жив» — **свежий** `<bus>/.watch/lock-<owner>.txt`; «висит фоновый процесс» ≠ «взведён inbox-watcher». При жалобе «watcher не сработал» — первым делом проверять свежесть лока, а не любой фоновый процесс.
 
 ### Механика
 
-- `wait-for-task.ps1` — фоновый watcher на **одного** агента. Спит (`Start-Sleep`), читает Tasks-store, фильтрует по `$env:AGENT_OWNER` (тот же фильтр, что §7). На **новой** `pending`-задаче завершается с докладом → харнесс будит сессию.
-- `Get-PendingTasks.ps1` — общая читалка (вынесенный фильтр §7), чтобы pull и push опирались на одну логику.
-- **Read-only** по Tasks-store. Состояние — `<workspace-root>/.watcher-state/` (gitignored): per-owner леджер `seen-<owner>.txt` + heartbeat-lock `lock-<owner>.txt`.
+- `pool watch` — фоновый watcher на **одного** агента (Owner/BusRoot из env). Спит (`Start-Sleep` внутри shell-процесса), читает `<bus>/<owner>/new/`. На **новом** сообщении завершается с докладом → харнесс будит сессию. Это **встроенный режим** той же pool-CLI, что и `send`/`hook` — отдельных скриптов `wait-for-task.ps1` / `Get-PendingTasks.ps1` больше нет.
+- **Read-only** по шине (сообщений не трогает). Состояние — внутри `<bus>` (gitignored): per-owner леджер `<bus>/.ledger/seen-<owner>.txt` + heartbeat-lock `<bus>/.watch/lock-<owner>.txt`.
 
 Запуск — **из сессии агента**, фоновой задачей (`Bash run_in_background: true`):
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\scripts\wait-for-task.ps1" -Owner <owner> -ListId <pool-name>
+powershell -NoProfile -ExecutionPolicy Bypass -File "<path-to-pool-cli>" watch
 ```
 
 ### Два инварианта корректности
 
-1. **Идемпотентный перевзвод — через леджер.** Watcher метит id задачи в приватном леджере **до выхода**; перевзведённый watcher эту задачу новой не считает. Метку держать в леджере, **НЕ в статусе задачи** (нестандартный статус ломает Tasks-UI; запись в общий store — гонка с CLI).
-2. **Один watcher на owner — heartbeat-lock.** Лок обновляется каждый цикл; при свежем локе новый watcher сразу выходит. На выходе лок снимается, чтобы перевзвод не блокировался. **После `/compact` ранее взведённый watcher остаётся жить** (процесс переживает compact) — поэтому на возобновлении агент должен **сперва проверить свежесть `lock-<owner>.txt`** и взводить, только если живого нет (дубль и так сам выйдет, но проверка экономит пустой запуск). Класть эту проверку в файл, который агент перечитывает на возобновлении (per-owner handoff), а не только в setup.
+1. **Идемпотентный перевзвод — через леджер.** Watcher метит id сообщения в приватном леджере (`<bus>/.ledger/seen-<owner>.txt`) **до выхода**; перевзведённый watcher это сообщение новым не считает.
+2. **Один watcher на owner — heartbeat-lock.** Лок (`<bus>/.watch/lock-<owner>.txt`) обновляется каждый цикл; при свежем локе новый watcher сразу выходит. На выходе лок снимается, чтобы перевзвод не блокировался. **После `/compact` ранее взведённый watcher остаётся жить** (процесс переживает compact) — поэтому на возобновлении агент должен **сперва проверить свежесть `lock-<owner>.txt`** и взводить, только если живого нет (дубль и так сам выйдет, но проверка экономит пустой запуск). Класть эту проверку в файл, который агент перечитывает на возобновлении (per-owner handoff), а не только в setup.
 
 ### Структурный предел и дисциплина перевзвода
 
@@ -550,15 +524,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\scripts\wa
 
 Допущение «завершение фоновой задачи будит **простаивающую** сессию И переживает `/compact`» — подтверждать вживую на конкретном окружении до раскатки на pool. Если push не будит idle-сессию — механизм вырождается в pull (корректно, но без ускорения).
 
-Полный код обоих скриптов — [Wrapper and Hook Scripts §4.5](wrapper-and-hook-scripts.md).
+Команда и дисциплина перевзвода — [Wrapper and Hook Scripts §4.5](wrapper-and-hook-scripts.md).
 
 ---
 
 ## 8. Per-owner handoff (передача себе-следующему)
 
-Tasks API + `.inbox/` — координация **между** агентами. Handoff —
-координация агента **с самим собой через время** (compact, перезапуск,
-новая сессия в той же роли). Это другой канал.
+Pool-шина — координация **между** агентами. Handoff — координация агента
+**с самим собой через время** (compact, перезапуск, новая сессия в той же
+роли). Это другой канал.
 
 ### Два правила
 
@@ -579,7 +553,7 @@ Tasks API + `.inbox/` — координация **между** агентами
 |--------|-----------|
 | Точно где остановился (файл, строка, следующий шаг) | Архитектурные решения — в `00_docs/architecture/` |
 | Незавершённые мысли, открытые вопросы | Готовые знания о коде — в самом коде |
-| Pointer на live TASK-NNN, на котором висишь | Дубликат payload — он уже в `.inbox/` |
+| Pointer на сообщение из `cur/`, по которому ещё работаешь | Дубликат тела сообщения — оно уже в шине / в репо |
 | «Чего не повторять» — обратная сторона feedback'а | Личные напоминания общего характера — в memory |
 
 Handoff делается **перед** ожидаемым compact'ом или закрытием сессии,
@@ -595,18 +569,20 @@ digraph lifecycle {
   rankdir=TB;
   node [shape=box, style=rounded];
 
-  CREATE [label="A: TaskCreate\n+ .inbox/TASK-NNN.md\nowner=B, status=pending"];
+  SEND [label="A: pool send -To B\n→ immutable file in\n<bus>/B/new/"];
   HOOK [label="Hook у B:\n[POOL INBOX] banner"];
-  ACCEPT [label="B: читает payload\nTaskUpdate(status=in_progress)"];
-  WORK [label="B: делает работу,\nопц. progress-файл"];
-  REPLY [label="B: .inbox/TASK-NNN-reply.md\nTaskUpdate(owner=A, status=pending)"];
-  CLOSE [label="A или B:\nTaskUpdate(status=completed)\n→ закрыто (файл остаётся,\nпозже в архив дворником)"];
-  PERSIST [label="payload остаётся в .inbox/\nкак persistent история"];
+  CLAIM [label="B: pool claim -Id <id>\n→ file moves to <bus>/B/cur/"];
+  WORK [label="B: делает работу"];
+  REPLY [label="B: pool reply -To A\n→ fresh file in <bus>/A/new/"];
+  ACK [label="B: pool ack -Id <id>\n→ file moves to <bus>/archive/"];
 
-  CREATE -> HOOK -> ACCEPT -> WORK -> REPLY -> CLOSE -> PERSIST;
-  WORK -> CLOSE [label="ответ не нужен"];
+  SEND -> HOOK -> CLAIM -> WORK -> REPLY -> ACK;
+  WORK -> ACK [label="ответ не нужен"];
 }
 ```
+
+«Две половины» / мис-оунинг / невидимые reply'и тут структурно невозможны
+(см. §4.2).
 
 ---
 
@@ -615,10 +591,10 @@ digraph lifecycle {
 - [Workspace Organization](workspace-organization.md) — куда pool кладут
   в общую структуру workspace.
 - [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md) — полные
-  рабочие примеры wrapper-батника, `pool-launch.ps1`, `inject-inbox.ps1`.
+  рабочие примеры wrapper-батника, pool-launch helper'а, pool-CLI `hook`.
 - [Intra-Project Pool Recipe](intra-project-pool-recipe.md) — пошаговое
   поднятие intra-project pool с нуля.
 - [Lessons Learned](lessons-learned.md) — антипаттерны и грабли (включая
-  историю top-level `owner`).
+  историю two-halves/top-level `owner`).
 - [Tech Lead Mode](tech-lead-mode.md) — рабочий режим Tech Lead'а, в
   котором каждый peer pool'а работает.

@@ -1,9 +1,24 @@
 # Wrapper and Hook Scripts
 
-Полные рабочие примеры скриптов pool-инфраструктуры. Все три файла —
-`pool-launch.ps1`, `inject-inbox.ps1`, wrapper-батник на агента —
-универсальные: один комплект обслуживает любое число pool'ов в одной
-workspace.
+Полные рабочие примеры скриптов pool-инфраструктуры.
+
+> ## ⚡ Координация — на maildir pool-шине (с этой ревизии)
+>
+> Hook и watcher теперь — **встроенные режимы общей pool-CLI** (`pool hook`
+> / `pool watch`), читающей шину `<bus>` (`POOL_BUS_ROOT`), а не отдельные
+> скрипты поверх Tasks-store. pool-CLI — **одна общая копия на весь
+> workspace**, в пулы НЕ копируется. Wrapper'ы несут env `POOL_BUS_ROOT`
+> (+ `POOL_INBOX_QUIET=1`); у ведущего агента — строка авто-запуска живой
+> доски (`board`-окно).
+>
+> Старые скрипты `inject-inbox.ps1` (§4), `wait-for-task.ps1` +
+> `Get-PendingTasks.ps1` (§4.5) **заменены** этими режимами — их код ниже
+> сохранён помеченным как **DEPRECATED / replaced** для понимания старых
+> пулов. `pool-launch` и дворник личных todo `archive-completed-tasks.ps1`
+> (§4.6) остаются как есть.
+
+Универсальные части (`pool-launch`, wrapper-батник на агента) обслуживают
+любое число pool'ов в одной workspace.
 
 > Целевая среда — Windows + PowerShell. На Linux/macOS принцип идентичен,
 > но конкретный код адаптируется (bash вместо powershell, /bin/sh shebang
@@ -16,10 +31,12 @@ workspace.
 ```
 cmd.exe                                              ← wrapper-батник
   set AGENT_OWNER=<role>-<scope>
-  set CLAUDE_CODE_TASK_LIST_ID=<pool-name>
+  set POOL_BUS_ROOT=<workspace-root>\.bus
+  set CLAUDE_CODE_TASK_LIST_ID=<pool-name>   (личные todo)
+  set POOL_INBOX_QUIET=1
   cd /d <workspace-root>
   ↓
-powershell -NoProfile -ExecutionPolicy Bypass        ← pool-launch.ps1
+powershell -NoProfile -ExecutionPolicy Bypass        ← pool-launch helper
   -File <workspace-root>\scripts\pool-launch.ps1
   -SessionTitle <SessionTitle>
   -ProjectKey <ProjectKey>
@@ -27,8 +44,8 @@ powershell -NoProfile -ExecutionPolicy Bypass        ← pool-launch.ps1
 claude.exe --dangerously-skip-permissions            ← Claude Code
   --resume <session-id>   ИЛИ   --name <SessionTitle>
   ↓
-hook on UserPromptSubmit                             ← inject-inbox.ps1
-  reads env vars, scans ~/.claude/tasks/<TASK_LIST_ID>/,
+hook on UserPromptSubmit                             ← pool-CLI 'hook'
+  reads env vars, scans <bus>/<owner>/new/,
   emits [POOL INBOX] banner
 ```
 
@@ -47,10 +64,15 @@ Env vars из `cmd.exe` наследуются всем дочерним про�
 @echo off
 REM Pool wrapper: <role> для подпроекта <scope>.
 REM Owner ID: <role>-<scope>. Pool: <pool-name>.
+REM Bus-native: координация через общую pool-CLI (maildir).
 REM Cwd = <workspace-root>. ProjectKey: <ProjectKey>.
 
 set AGENT_OWNER=<role>-<scope>
+set POOL_BUS_ROOT=<workspace-root>\.bus
 set CLAUDE_CODE_TASK_LIST_ID=<pool-name>
+set POOL_INBOX_QUIET=1
+REM Только для ВЕДУЩЕГО агента (lead) — раскомментировать: при старте откроется живая доска пула:
+REM powershell -NoProfile -ExecutionPolicy Bypass -File "<path-to-pool-bus>\board-window.ps1" -BusRoot "<workspace-root>\.bus"
 cd /d <workspace-root>
 powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\scripts\pool-launch.ps1" -SessionTitle "<SessionTitle>" -ProjectKey "<ProjectKey>"
 if errorlevel 1 pause
@@ -62,13 +84,16 @@ if errorlevel 1 pause
 |-------------|----------------|--------|
 | `<role>` | Роль агента: `tech-lead`, `architect`, `frontend`, `backend`, `qa`, `devops` | `frontend` |
 | `<scope>` | Имя pool'а или подпроекта (kebab-case) | `foo` |
-| `<pool-name>` | Идентификатор `CLAUDE_CODE_TASK_LIST_ID`, обычно `<scope>-pool` или `<workspace>-pool` | `foo-pool` |
 | `<workspace-root>` | Абсолютный путь к корню workspace | `C:\work\foo-workspace` |
+| `<bus>` = `POOL_BUS_ROOT` | Корень шины, обычно `<workspace-root>\.bus` | `C:\work\foo-workspace\.bus` |
+| `<pool-name>` | `CLAUDE_CODE_TASK_LIST_ID` — каталог **личных** todo, обычно `<scope>-pool` | `foo-pool` |
 | `<SessionTitle>` | Display name сессии в PascalCase | `Frontend-Foo` |
 | `<ProjectKey>` | Имя проекта в `~/.claude/projects/`. Совпадает с `<workspace-root>` с заменой `\` и `:` на `---` | `C---work-foo-workspace` |
 
 **Один батник на одного агента.** Двойной клик возвращает агента в его
-же conversation (через auto-resume по `<SessionTitle>`).
+же conversation (через auto-resume по `<SessionTitle>`). `POOL_BUS_ROOT`
+одинаков у всех агентов одного workspace (одна шина); у **ведущего**
+агента дополнительно раскомментирована строка авто-запуска живой доски.
 
 ---
 
@@ -167,12 +192,54 @@ exit $LASTEXITCODE
 
 ---
 
-## 4. Hook `inject-inbox.ps1`
+## 4. Hook = pool-CLI `hook` (bus-native)
 
-`<workspace-root>/.claude/hooks/inject-inbox.ps1`:
+В bus-native пуле hook — это **подкоманда общей pool-CLI**, а не отдельный
+файл. Он читает `$env:AGENT_OWNER` и `$env:POOL_BUS_ROOT`, перечисляет
+`<bus>/<owner>/new/` и эмитит баннер `[POOL INBOX]`. UTF-8 на stdout
+выставляет сама pool-CLI (кириллица без mojibake), отдельный fix не нужен.
+
+### Регистрация hook'а
+
+`<workspace-root>/.claude/settings.local.json` (gitignored,
+локально-машинная конфигурация); путь к pool-CLI **абсолютный**, в пул не
+копируется:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<path-to-pool-cli>\" hook"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`<path-to-pool-cli>` — абсолютный путь к общей pool-CLI workspace.
+
+**Поведенческие гарантии:** при пустых env vars — тихий выход (pool не
+активен, plain-сессии не шумят); один битый файл шины не валит баннер;
+зависимостей нет (встроенные cmdlet'ы PowerShell 5.1).
+
+### DEPRECATED / replaced — старый `inject-inbox.ps1`
+
+> Ниже — прежний отдельный hook-скрипт поверх Tasks-store. **Заменён**
+> режимом `pool hook` (см. выше): адрес получателя теперь — папка
+> `<bus>/<owner>/new/`, а не top-level `owner` объекта-задачи. Код оставлен
+> для понимания старых (Tasks-API) пулов.
+
+`<workspace-root>/.claude/hooks/inject-inbox.ps1` (DEPRECATED):
 
 ```powershell
-# UserPromptSubmit hook for pool sessions.
+# DEPRECATED — replaced by pool-CLI `hook`. Kept for legacy (Tasks-API) pools only.
+# UserPromptSubmit hook for pool sessions (Tasks-API era).
 #
 # Behavior:
 #   1. Reads $env:AGENT_OWNER and $env:CLAUDE_CODE_TASK_LIST_ID.
@@ -184,8 +251,9 @@ exit $LASTEXITCODE
 #      Claude Code wraps stdout into <user-prompt-submit-hook> block
 #      and injects it into the session context before each user prompt.
 #
-# CRITICAL invariant: filtering is strictly by top-level "owner" field.
-# metadata.to / metadata.assignee are NOT consulted.
+# CRITICAL invariant (legacy): filtering is strictly by top-level "owner" field.
+# metadata.to / metadata.assignee are NOT consulted. (Exactly the "two halves"
+# pitfall the maildir bus removes structurally — addressee is a folder, not a field.)
 
 # UTF-8 stdout — without this, cyrillic banner arrives as mojibake.
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -235,53 +303,17 @@ if ($pending.Count -eq 0) {
 Write-Output "[POOL INBOX] ${owner}: $($pending.Count) pending"
 foreach ($t in $pending) {
     $from = ''
-    $payload = ''
     if ($t.metadata) {
         if ($t.metadata.PSObject.Properties.Name -contains 'from') {
             $from = " (from $($t.metadata.from))"
         }
-        if ($t.metadata.PSObject.Properties.Name -contains 'payload_path') {
-            $payload = "`n  payload: $($t.metadata.payload_path)"
-        }
     }
-    Write-Output "- $($t.id)${from}: $($t.subject)${payload}"
+    Write-Output "- $($t.id)${from}: $($t.subject)"
 }
 Write-Output "Details: TaskList(owner='${owner}', status='pending')"
 
 exit 0
 ```
-
-**Поведенческие гарантии:**
-
-- При пустых env vars — выход без вывода. Pool не активен → не шумим в
-  plain-сессиях.
-- Malformed JSON в `~/.claude/tasks/<id>/` — пропускается молча.
-  Один сломанный файл не валит весь баннер.
-- Тривиальный, без зависимостей. Только встроенные cmdlet'ы PowerShell 5.1.
-
-### Регистрация hook'а
-
-`<workspace-root>/.claude/settings.local.json` (gitignored,
-локально-машинная конфигурация):
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.claude\\hooks\\inject-inbox.ps1\""
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-`<workspace-root>` — заменить на абсолютный путь.
 
 ### Discovery: walk-up НЕ работает
 
@@ -296,37 +328,44 @@ Claude Code ищет `.claude/settings.local.json` с блоком `hooks` то�
   правильно для любого agent'а workspace, в т.ч. в intra-project pool.
 - Если wrapper делает `cd /d <workspace-root>\01_projects\<подпроект>`
   — `settings.local.json` обязательно в `<подпроект>/.claude/` (с
-  абсолютным путём в `command` к одному и тому же hook-скрипту в
-  workspace).
+  абсолютным путём в `command` к одной и той же pool-CLI в workspace).
 
 ### Первое одобрение hook'а
 
 `--dangerously-skip-permissions` **НЕ** обходит подтверждение нового
 hook'а — это отдельный security gate. На первом запуске Claude Code
-покажет prompt: «Allow command: powershell ... inject-inbox.ps1?».
+покажет prompt: «Allow command: powershell ... pool ... hook?».
 Нажать «Yes / Always allow for this project», со второго промпта баннер
 появится сам.
 
 ---
 
-## 4.5. Опциональный push-watcher (`wait-for-task.ps1`)
+## 4.5. Опциональный push-watcher = pool-CLI `watch`
 
-Опция «по согласованию», **не для всех агентов** (см. [Pool Communication §7.5](pool-communication.md)). Фоновый watcher будит простаивающую сессию при входящей задаче. Спит в shell-процессе (ноль контекста на ожидании), **read-only** по Tasks-store; состояние — в `<workspace-root>/.watcher-state/` (gitignored): per-owner леджер + heartbeat-lock.
+Опция «по согласованию», **не для всех агентов** (см. [Pool Communication §7.5](pool-communication.md)). Фоновый watcher будит простаивающую сессию при входящем сообщении. В bus-native пуле это **встроенный режим общей pool-CLI** — `pool watch` (Owner/BusRoot из env). Спит в shell-процессе (ноль контекста на ожидании), **read-only** по шине; состояние — внутри `<bus>` (gitignored): per-owner леджер `<bus>/.ledger/seen-<owner>.txt` + heartbeat-lock `<bus>/.watch/lock-<owner>.txt`. На **новом** сообщении в `<bus>/<owner>/new/` завершается с докладом → харнесс будит сессию.
 
 Запуск — **из сессии агента**, фоновой задачей (`Bash run_in_background: true`):
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\scripts\wait-for-task.ps1" -Owner <owner> -ListId <pool-name>
+powershell -NoProfile -ExecutionPolicy Bypass -File "<path-to-pool-cli>" watch
 ```
 
-### Общая читалка `Get-PendingTasks.ps1`
+**Инварианты и дисциплина** — в [Pool Communication §7.5](pool-communication.md): идемпотентный перевзвод через леджер, один watcher на owner через heartbeat-lock, дисциплина «перевзвод — ШАГ 1». Механизм экспериментальный: подтвердить idle-wake + поведение при `/compact` на своём окружении до раскатки.
 
-Тот же фильтр, что у hook'а (§4), вынесен в общую функцию — pull и push опираются на одну логику.
+### DEPRECATED / replaced — старые `Get-PendingTasks.ps1` + `wait-for-task.ps1`
+
+> Ниже — прежние отдельные скрипты push-watcher'а поверх Tasks-store.
+> **Заменены** режимом `pool watch` (см. выше): он читает `<bus>/<owner>/new/`,
+> а состояние держит внутри `<bus>` (`.ledger/`, `.watch/`). Код оставлен для
+> понимания старых (Tasks-API) пулов; в bus-native пуле эти файлы не нужны.
+
+`Get-PendingTasks.ps1` (DEPRECATED) — общая читалка Tasks-store, тот же фильтр, что у старого hook'а:
 
 ```powershell
+# DEPRECATED — replaced by pool-CLI `watch`/`hook` reading <bus>/<owner>/new/.
 # Get-PendingTasks.ps1
 # Shared reader: returns pending, actionable tasks for one owner from a pool Tasks store.
-# Same filter as inject-inbox.ps1 (status=pending, owner match, kind != personal).
+# Same filter as the legacy inject-inbox.ps1 (status=pending, owner match, kind != personal).
 # Dot-source it:  . (Join-Path $PSScriptRoot 'Get-PendingTasks.ps1')
 
 function Get-PendingTasks {
@@ -369,11 +408,12 @@ function Get-PendingTasks {
 }
 ```
 
-### Watcher `wait-for-task.ps1`
+### Watcher `wait-for-task.ps1` (DEPRECATED)
 
 ```powershell
+# DEPRECATED — replaced by pool-CLI `watch` (reads <bus>/<owner>/new/, state in <bus>/.ledger + <bus>/.watch).
 # wait-for-task.ps1
-# Background "sleeping watcher" for ONE pool agent.
+# Background "sleeping watcher" for ONE pool agent (Tasks-API era).
 #
 # Polls the pool Tasks store for NEW pending tasks addressed to $Owner. The sleep happens
 # inside this shell process (Start-Sleep) - so it costs ZERO model context while waiting.
@@ -496,13 +536,11 @@ while ($true) {
 }
 ```
 
-**Инварианты и дисциплина** — в [Pool Communication §7.5](pool-communication.md): идемпотентный перевзвод через леджер, один watcher на owner через heartbeat-lock, дисциплина «перевзвод — ШАГ 1». Механизм экспериментальный: подтвердить idle-wake + поведение при `/compact` на своём окружении до раскатки.
-
 ---
 
-## 4.6. Дворник стора задач (`archive-completed-tasks.ps1`)
+## 4.6. Дворник стора ЛИЧНЫХ todo (`archive-completed-tasks.ps1`)
 
-**Обязателен для любого пула** (в отличие от опционального watcher'а §4.5). Причина — в [Pool Communication §«Lifecycle и накопление completed»](pool-communication.md): встроенная система задач Claude Code инжектит в контекст **весь** список `list_id` почти каждый ход, **включая `completed`** и **без фильтра по `owner`**; в текущих сборках `completed` файл не удаляет, completed копятся, и список на сотни задач съедает 10–15k токенов/ход у каждого peer'а. Выключить только напоминание нельзя. Рычаг — держать живой список коротким.
+**Обязателен для любого пула, где агенты ведут личные todo через Tasks API** (координация на шине его не касается — у неё свой `archive/` внутри `<bus>`). Причина — в [Pool Communication §5 «Накопление completed»](pool-communication.md): встроенная система задач Claude Code инжектит в контекст **весь** список `list_id` почти каждый ход, **включая `completed`** и **без фильтра по `owner`**; в текущих сборках `completed` файл не удаляет, completed копятся, и список на сотни задач съедает 10–15k токенов/ход у каждого peer'а. Выключить только напоминание нельзя. Рычаг — держать живой список коротким.
 
 Дворник переносит (move, не delete → обратимо) `status=completed` старше `-MinAgeHours` из `~/.claude/tasks/<list>/` в соседний `~/.claude/tasks/<list>-archive/` (архив — не `list_id`, харнесс его не инжектит). Read-only по активным; нечитаемые/mid-write пропускает; safe при гонке с CLI. **Collision-safe:** харнесс переиспользует id после архивации (`max+1` по усохшему живому стору), поэтому существующий архивный `<id>.json` не перезатирается — клон уезжает как `<id>.dupN.json`.
 
@@ -606,31 +644,32 @@ exit 0
 
 Признак: env vars выставлены, но баннер `[POOL INBOX]` не появляется.
 
-1. Проверь `$env:AGENT_OWNER` и `$env:CLAUDE_CODE_TASK_LIST_ID` в
-   запущенной сессии — попроси Claude вывести их.
-2. Проверь наличие `~/.claude/tasks/<TASK_LIST_ID>/` — папка создаётся
-   при первом `TaskCreate`. Если её нет — никаких pending нет, это норма.
+1. Проверь `$env:AGENT_OWNER` и `$env:POOL_BUS_ROOT` в запущенной
+   сессии — попроси Claude вывести их.
+2. Проверь наличие `<bus>` (`POOL_BUS_ROOT`) — каталоги шины создаются
+   лениво при первом `pool send`. Если ящика `<bus>/<owner>/new/` нет —
+   входящих нет, это норма.
 3. Проверь `<workspace-root>/.claude/settings.local.json` —
-   блок `hooks.UserPromptSubmit` на месте, путь к скрипту абсолютный и
-   валидный.
+   блок `hooks.UserPromptSubmit` на месте, путь к pool-CLI абсолютный и
+   валидный, режим `hook` указан.
 4. Проверь, что hook был одобрен. На первом запуске после регистрации
    нового hook'а Claude Code просит подтверждение — без него hook не
    выполняется.
 5. Запусти hook вручную с выставленными env vars:
    ```
    $env:AGENT_OWNER='<owner>'
-   $env:CLAUDE_CODE_TASK_LIST_ID='<pool-name>'
-   powershell -NoProfile -File <workspace-root>\.claude\hooks\inject-inbox.ps1
+   $env:POOL_BUS_ROOT='<bus>'
+   powershell -NoProfile -File <path-to-pool-cli> hook
    ```
    Должен вывести баннер или `clean (0 pending)`.
 
 ## Диагностика: mojibake в баннере
 
-Симптом: вместо имён роли/задач — мусорные символы.
+Симптом: вместо имён роли/сообщений — мусорные символы.
 
-Причина: hook не выставил UTF-8 для stdout. Проверь, что первые две
-строки скрипта — это `[Console]::OutputEncoding = ...` и
-`$OutputEncoding = ...` (см. inject-inbox.ps1 в этой папке).
+Причина (редко): кастомный hook вместо `pool hook` не выставил UTF-8 для
+stdout. pool-CLI сам держит UTF-8 на выводе и чтении шины — сверь
+`settings.local.json` с актуальной регистрацией (§4).
 ```
 
 ---
@@ -638,7 +677,7 @@ exit 0
 ## 6. Связанные документы
 
 - [Pool Communication](pool-communication.md) — как эта инфра работает в
-  координации с Tasks API и mailbox.
+  координации через maildir pool-шину.
 - [Workspace Organization](workspace-organization.md) — куда эти скрипты
   кладутся в общей структуре.
 - [Intra-Project Pool Recipe](intra-project-pool-recipe.md) — пошаговый
