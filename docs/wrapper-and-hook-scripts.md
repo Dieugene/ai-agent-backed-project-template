@@ -7,15 +7,16 @@
 > Hook и watcher теперь — **встроенные режимы общей pool-CLI** (`pool hook`
 > / `pool watch`), читающей шину `<bus>` (`POOL_BUS_ROOT`), а не отдельные
 > скрипты поверх Tasks-store. pool-CLI — **одна общая копия на весь
-> workspace**, в пулы НЕ копируется. Wrapper'ы несут env `POOL_BUS_ROOT`
-> (+ `POOL_INBOX_QUIET=1`); у ведущего агента — строка авто-запуска живой
-> доски (`board`-окно).
+> workspace** (её устройство — §1.5), в пулы НЕ копируется. Wrapper'ы несут
+> env `POOL_BUS_ROOT` (+ `POOL_INBOX_QUIET=1`); у ведущего агента — строка
+> авто-запуска живой доски (`board`-окно).
 >
 > Старые скрипты `inject-inbox.ps1` (§4), `wait-for-task.ps1` +
-> `Get-PendingTasks.ps1` (§4.5) **заменены** этими режимами — их код ниже
-> сохранён помеченным как **DEPRECATED / replaced** для понимания старых
-> пулов. `pool-launch` и дворник личных todo `archive-completed-tasks.ps1`
-> (§4.6) остаются как есть.
+> `Get-PendingTasks.ps1` (§4.5) **заменены** этими режимами — вместо их кода
+> оставлена пометка **DEPRECATED** + чем заменено (сам код в bus-native пуле
+> не нужен). `pool-launch` (§3) остаётся как есть; дворник **личных** todo
+> `archive-completed-tasks.ps1` (§4.6) тоже остаётся, но его код вынесен в
+> шаблон `scripts/templates/`.
 
 Универсальные части (`pool-launch`, wrapper-батник на агента) обслуживают
 любое число pool'ов в одной workspace.
@@ -53,6 +54,75 @@ Env vars из `cmd.exe` наследуются всем дочерним про�
 `-NoProfile` отключает загрузку `$PROFILE` пользователя — никаких
 сторонних алиасов или эффектов. Прямой вызов `claude` (без алиаса
 `cld` или подобных) исключает риск потери env vars из-за лишнего звена.
+
+---
+
+## 1.5. Ядро pool-CLI: `pool.ps1` (одна общая копия на workspace)
+
+Всё, что ниже (`hook`, `watch`, борд, сама координация), — **подкоманды одного
+скрипта** `pool.ps1`. Это ядро pool-инфраструктуры: wrapper (§2) и helper (§3)
+лишь запускают сессию и прокидывают env, а обмен сообщениями между агентами
+идёт через `pool.ps1`.
+
+**Одна копия на весь workspace.** `pool.ps1` лежит в
+`<workspace-root>\scripts\pool.ps1` (в этом репозитории —
+[`../scripts/pool.ps1`](../scripts/pool.ps1)) и **в пулы НЕ копируется**. Пул
+поставляет только:
+
+- **данные** — свой каталог-шину `<bus>` (`POOL_BUS_ROOT`), пустой на старте,
+  наполняется лениво при первом `send`;
+- **тонкую привязку** — env в wrapper'е (§2) + регистрацию hook'а в
+  `settings.local.json` (§4), где путь к `pool.ps1` абсолютный.
+
+Правка этого одного файла меняет поведение **сразу всех** пулов workspace —
+per-pool rollout не нужен. `Owner` и `BusRoot` берутся из env
+(`AGENT_OWNER` / `POOL_BUS_ROOT`), поэтому hook и watcher работают без явных
+аргументов.
+
+**Maildir-модель** (полный lifecycle — [Pool Communication §4](pool-communication.md)):
+
+- **сообщение = один immutable-файл**; id = `<unix-ms>-<hex>`,
+  лексикографически sortable, НИКОГДА не переиспользуется;
+- **адрес получателя = ПАПКА** `<bus>/<owner>/new/` — не поле объекта, а
+  каталог;
+- **переход состояния = атомарный rename**: `tmp/`→`new/` (доставка),
+  `new/`→`cur/` (claim), `cur/`→`archive/` (ack).
+
+Файлы в шину руками не пишут — только через `pool.ps1`: он гарантирует
+атомарный `tmp`→`new` rename и читает/пишет тела как UTF-8 без BOM.
+
+**Кодировки — специфика Windows/PS 5.1.** Сам исходник `pool.ps1` —
+**ASCII-only**: PowerShell 5.1 без BOM ломает кириллицу прямо в тексте
+скрипта, поэтому в коде нет ни одной кириллической буквы. А **тела сообщений**
+пишутся и читаются как **UTF-8 без BOM** в рантайме — значит кириллические
+данные (темы, тексты задач) безопасны. Как следствие, режим `hook` сам
+выставляет UTF-8 на stdout: отдельно чинить mojibake баннера (как приходилось
+в старом кастомном hook'е) не нужно.
+
+**Подкоманды** (полный код и шапка — [`../scripts/pool.ps1`](../scripts/pool.ps1);
+здесь — карта, не дубль):
+
+| Подкоманда | Назначение |
+|-----------|-----------|
+| `send` | поставить задачу: файл в `<bus>/<To>/new/` |
+| `reply` | ответить/отчитаться (свежий id; `-InReplyTo <id>` тянет thread) |
+| `note` | сообщение-FYI (не задача): секция `[POOL NOTE]`, гасится `dismiss`; `-Wake` будит watcher |
+| `inbox` | входящие (`new/`) — то же, что печатает hook-баннер |
+| `mine` | своя «тарелка»: `cur/` (в работе) + `new/` (ожидает) + notes — восстановление после `/compact` |
+| `claim` | взять задачу: `new/`→`cur/` (атомарно; проигравший получит `CLAIM-MISS`) |
+| `ack` | завершить: `cur/`→`archive/` |
+| `dismiss` | закрыть note одним шагом: `new/`→`archive/` (без claim/ack) |
+| `check` | один проход детекции watcher'а (для скриптов/теста) |
+| `watch` | фоновый спящий watcher (§4.5) |
+| `hook` | UserPromptSubmit-hook: баннер `[POOL INBOX]` (§4) |
+| `activity` | hook активности: пишет `.activity/<owner>` (busy/idle/subagents) для борда |
+| `board` | доска пула: снимок · `-Watch` живая здесь · `-Show` живая в новом окне |
+| `help` | печатает шапку скрипта |
+
+Разделение **задача vs note**: задача (`send`/`reply`) требует действия
+(claim → работа → `ack`/`reply`), висит в `[POOL INBOX]` и на борде, будит
+watcher. Note (`note`) — FYI: отдельная секция, на борде нет, гасится одним
+`dismiss`; будит watcher только с флагом `-Wake`.
 
 ---
 
@@ -228,92 +298,16 @@ exit $LASTEXITCODE
 активен, plain-сессии не шумят); один битый файл шины не валит баннер;
 зависимостей нет (встроенные cmdlet'ы PowerShell 5.1).
 
-### DEPRECATED / replaced — старый `inject-inbox.ps1`
+### DEPRECATED — старый `inject-inbox.ps1`
 
-> Ниже — прежний отдельный hook-скрипт поверх Tasks-store. **Заменён**
-> режимом `pool hook` (см. выше): адрес получателя теперь — папка
-> `<bus>/<owner>/new/`, а не top-level `owner` объекта-задачи. Код оставлен
-> для понимания старых (Tasks-API) пулов.
-
-`<workspace-root>/.claude/hooks/inject-inbox.ps1` (DEPRECATED):
-
-```powershell
-# DEPRECATED — replaced by pool-CLI `hook`. Kept for legacy (Tasks-API) pools only.
-# UserPromptSubmit hook for pool sessions (Tasks-API era).
-#
-# Behavior:
-#   1. Reads $env:AGENT_OWNER and $env:CLAUDE_CODE_TASK_LIST_ID.
-#      If either is missing, exits silently (exit 0) — pool inactive, no noise.
-#   2. Scans ~/.claude/tasks/<TASK_LIST_ID>/*.json.
-#   3. Filters: status == 'pending' AND owner == $AGENT_OWNER
-#                                  AND metadata.kind != 'personal'.
-#   4. Emits [POOL INBOX] banner to stdout.
-#      Claude Code wraps stdout into <user-prompt-submit-hook> block
-#      and injects it into the session context before each user prompt.
-#
-# CRITICAL invariant (legacy): filtering is strictly by top-level "owner" field.
-# metadata.to / metadata.assignee are NOT consulted. (Exactly the "two halves"
-# pitfall the maildir bus removes structurally — addressee is a folder, not a field.)
-
-# UTF-8 stdout — without this, cyrillic banner arrives as mojibake.
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$OutputEncoding           = [System.Text.UTF8Encoding]::new($false)
-
-$owner  = $env:AGENT_OWNER
-$listId = $env:CLAUDE_CODE_TASK_LIST_ID
-
-if ([string]::IsNullOrEmpty($owner) -or [string]::IsNullOrEmpty($listId)) {
-    exit 0   # pool inactive — silent
-}
-
-$tasksDir = Join-Path $HOME ".claude/tasks/$listId"
-$tasks = @()
-
-if (Test-Path $tasksDir) {
-    Get-ChildItem -Path $tasksDir -Filter '*.json' -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notmatch '^\.' } |
-        ForEach-Object {
-            try {
-                $raw = Get-Content -Path $_.FullName -Raw -Encoding UTF8 -ErrorAction Stop
-                $task = $raw | ConvertFrom-Json -ErrorAction Stop
-                if ($task) { $tasks += $task }
-            } catch {
-                # malformed file — skip silently
-            }
-        }
-}
-
-$pending = @($tasks | Where-Object {
-    if ($_.status -ne 'pending')   { return $false }
-    if ($_.owner  -ne $owner)      { return $false }
-    $kind = $null
-    if ($_.metadata -and ($_.metadata.PSObject.Properties.Name -contains 'kind')) {
-        $kind = $_.metadata.kind
-    }
-    return $kind -ne 'personal'
-})
-
-if ($pending.Count -eq 0) {
-    if ($env:POOL_INBOX_QUIET -ne '1') {
-        Write-Output "[POOL INBOX] ${owner}: clean (0 pending)"
-    }
-    exit 0
-}
-
-Write-Output "[POOL INBOX] ${owner}: $($pending.Count) pending"
-foreach ($t in $pending) {
-    $from = ''
-    if ($t.metadata) {
-        if ($t.metadata.PSObject.Properties.Name -contains 'from') {
-            $from = " (from $($t.metadata.from))"
-        }
-    }
-    Write-Output "- $($t.id)${from}: $($t.subject)"
-}
-Write-Output "Details: TaskList(owner='${owner}', status='pending')"
-
-exit 0
-```
+Прежний отдельный hook-скрипт поверх Tasks-store
+(`<workspace-root>/.claude/hooks/inject-inbox.ps1`): читал
+`~/.claude/tasks/<list>/*.json` и фильтровал строго по top-level `owner`.
+**Заменён** режимом `pool hook`. Ключевая разница: адрес получателя теперь —
+папка `<bus>/<owner>/new/`, а не поле `owner` объекта-задачи, поэтому граблю
+«двух половин» (payload без правильного owner → невидимое сообщение) шина
+снимает **структурно**. Отдельный hook-файл в bus-native пуле не нужен —
+код убран за ненадобностью.
 
 ### Discovery: walk-up НЕ работает
 
@@ -352,189 +346,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<path-to-pool-cli>" watch
 
 **Инварианты и дисциплина** — в [Pool Communication §7.5](pool-communication.md): идемпотентный перевзвод через леджер, один watcher на owner через heartbeat-lock, дисциплина «перевзвод — ШАГ 1». Механизм экспериментальный: подтвердить idle-wake + поведение при `/compact` на своём окружении до раскатки.
 
-### DEPRECATED / replaced — старые `Get-PendingTasks.ps1` + `wait-for-task.ps1`
+### DEPRECATED — старые `Get-PendingTasks.ps1` + `wait-for-task.ps1`
 
-> Ниже — прежние отдельные скрипты push-watcher'а поверх Tasks-store.
-> **Заменены** режимом `pool watch` (см. выше): он читает `<bus>/<owner>/new/`,
-> а состояние держит внутри `<bus>` (`.ledger/`, `.watch/`). Код оставлен для
-> понимания старых (Tasks-API) пулов; в bus-native пуле эти файлы не нужны.
-
-`Get-PendingTasks.ps1` (DEPRECATED) — общая читалка Tasks-store, тот же фильтр, что у старого hook'а:
-
-```powershell
-# DEPRECATED — replaced by pool-CLI `watch`/`hook` reading <bus>/<owner>/new/.
-# Get-PendingTasks.ps1
-# Shared reader: returns pending, actionable tasks for one owner from a pool Tasks store.
-# Same filter as the legacy inject-inbox.ps1 (status=pending, owner match, kind != personal).
-# Dot-source it:  . (Join-Path $PSScriptRoot 'Get-PendingTasks.ps1')
-
-function Get-PendingTasks {
-    param(
-        [Parameter(Mandatory)][string]$Owner,
-        [Parameter(Mandatory)][string]$ListId,
-        [string]$TasksDir
-    )
-
-    if ([string]::IsNullOrWhiteSpace($TasksDir)) {
-        $TasksDir = Join-Path $HOME ".claude/tasks/$ListId"
-    }
-
-    $tasks = @()
-    if (Test-Path $TasksDir) {
-        Get-ChildItem -Path $TasksDir -Filter '*.json' -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notmatch '^\.' } |
-            ForEach-Object {
-                try {
-                    $raw  = Get-Content -Path $_.FullName -Raw -Encoding UTF8 -ErrorAction Stop
-                    $task = $raw | ConvertFrom-Json -ErrorAction Stop
-                    if ($task) { $tasks += $task }
-                } catch {
-                    # malformed task file - skip silently
-                }
-            }
-    }
-
-    $pending = @($tasks | Where-Object {
-        if ($_.status -ne 'pending') { return $false }
-        if ($_.owner -ne $Owner)     { return $false }
-        $kind = $null
-        if ($_.metadata -and ($_.metadata.PSObject.Properties.Name -contains 'kind')) {
-            $kind = $_.metadata.kind
-        }
-        return $kind -ne 'personal'
-    })
-
-    return $pending
-}
-```
-
-### Watcher `wait-for-task.ps1` (DEPRECATED)
-
-```powershell
-# DEPRECATED — replaced by pool-CLI `watch` (reads <bus>/<owner>/new/, state in <bus>/.ledger + <bus>/.watch).
-# wait-for-task.ps1
-# Background "sleeping watcher" for ONE pool agent (Tasks-API era).
-#
-# Polls the pool Tasks store for NEW pending tasks addressed to $Owner. The sleep happens
-# inside this shell process (Start-Sleep) - so it costs ZERO model context while waiting.
-# On the FIRST newly-detected task it records the task id in a private per-owner ledger and
-# EXITS with a report; the harness then wakes the agent. Re-arm is idempotent: an already
-# detected task stays in the ledger and will NOT re-trigger the next watcher.
-#
-# Read-only on the Tasks store (never writes task files). All state lives in $StateDir
-# (ledger + heartbeat lock), which is gitignored and fully owned by the watcher.
-#
-# Launch from the agent session as a BACKGROUND task (Bash run_in_background: true), so it
-# survives across turns and the harness re-invokes the agent when it exits:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\scripts\wait-for-task.ps1" -Owner <owner> -ListId <pool-name>
-
-param(
-    [string]$Owner          = $env:AGENT_OWNER,
-    [string]$ListId         = $env:CLAUDE_CODE_TASK_LIST_ID,
-    [int]$IntervalSeconds   = 45,
-    [double]$MaxMinutes     = 0,        # 0 = unlimited
-    [string]$TasksDir,                  # default: $HOME\.claude\tasks\$ListId
-    [string]$StateDir                   # default: <scripts>\..\.watcher-state
-)
-
-$ErrorActionPreference = 'Continue'
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$OutputEncoding           = [System.Text.UTF8Encoding]::new($false)
-
-if ([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($ListId)) {
-    Write-Output "[WATCHER] ERROR: Owner / ListId not set (pass -Owner / -ListId, or set AGENT_OWNER / CLAUDE_CODE_TASK_LIST_ID)."
-    exit 0
-}
-
-. (Join-Path $PSScriptRoot 'Get-PendingTasks.ps1')
-
-if ([string]::IsNullOrWhiteSpace($StateDir)) {
-    $StateDir = Join-Path $PSScriptRoot '..\.watcher-state'
-}
-if (-not (Test-Path $StateDir)) {
-    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
-}
-$ledgerPath = Join-Path $StateDir ("seen-{0}.txt" -f $Owner)
-$lockPath   = Join-Path $StateDir ("lock-{0}.txt"  -f $Owner)
-
-$reArm = '  Bash(run_in_background:true): powershell -NoProfile -ExecutionPolicy Bypass -File "{0}" -Owner {1} -ListId {2}' -f $PSCommandPath, $Owner, $ListId
-
-function Remove-Lock { if (Test-Path $lockPath) { Remove-Item $lockPath -Force -ErrorAction SilentlyContinue } }
-function Touch-Lock  { Set-Content -Path $lockPath -Value ((Get-Date).ToString('o')) -Encoding ASCII }
-
-# --- singleton heartbeat-lock: never run two watchers for the same owner ---
-$staleSeconds = [Math]::Max(120, $IntervalSeconds * 3)
-if (Test-Path $lockPath) {
-    $age = ((Get-Date) - (Get-Item $lockPath).LastWriteTime).TotalSeconds
-    if ($age -lt $staleSeconds) {
-        Write-Output ("[WATCHER] {0}: another watcher already active (lock age {1:N0}s) - exiting (not re-arming)." -f $Owner, $age)
-        exit 0
-    }
-}
-Touch-Lock
-
-# --- load ledger (ids already reported as detected) ---
-$seen = @{}
-if (Test-Path $ledgerPath) {
-    foreach ($line in (Get-Content -Path $ledgerPath -Encoding UTF8 -ErrorAction SilentlyContinue)) {
-        $id = "$line".Trim()
-        if ($id) { $seen[$id] = $true }
-    }
-}
-
-$startTime = Get-Date
-
-while ($true) {
-    $pending    = @(Get-PendingTasks -Owner $Owner -ListId $ListId -TasksDir $TasksDir)
-    $pendingIds = @($pending | ForEach-Object { "$($_.id)" })
-    $new        = @($pending | Where-Object { -not $seen.ContainsKey("$($_.id)") })
-
-    if ($new.Count -gt 0) {
-        # mark ALL current pending as seen (adds new ids, prunes completed ones), persist, report, exit
-        Set-Content -Path $ledgerPath -Value $pendingIds -Encoding UTF8
-        Remove-Lock
-
-        Write-Output ("[WATCHER] {0}: {1} new task(s). Do TWO steps IN ORDER." -f $Owner, $new.Count)
-        Write-Output ""
-        Write-Output "STEP 1 (do this FIRST, before reading the task below - non-negotiable): re-arm the watcher:"
-        Write-Output $reArm
-        Write-Output "(Safe: re-arm will NOT re-fire on the task(s) below - they are already in the ledger.)"
-        Write-Output ""
-        Write-Output "STEP 2 (only after STEP 1 is launched) - handle the task(s):"
-        foreach ($t in $new) {
-            $from = ''
-            if ($t.metadata -and ($t.metadata.PSObject.Properties.Name -contains 'from')) { $from = " (from $($t.metadata.from))" }
-            $title = $null
-            if ($t.PSObject.Properties.Name -contains 'subject' -and -not [string]::IsNullOrWhiteSpace($t.subject)) { $title = $t.subject }
-            elseif ($t.PSObject.Properties.Name -contains 'title' -and -not [string]::IsNullOrWhiteSpace($t.title)) { $title = $t.title }
-            if ([string]::IsNullOrWhiteSpace($title)) { $title = '<no title>' }
-            Write-Output ("- {0}{1}: {2}" -f $t.id, $from, $title)
-            if ($t.metadata -and ($t.metadata.PSObject.Properties.Name -contains 'payload_path')) {
-                Write-Output ("  payload: {0}" -f $t.metadata.payload_path)
-            }
-        }
-        exit 0
-    }
-
-    # prune in-memory ledger of ids no longer pending (keeps it tidy over long runs)
-    if ($seen.Count -gt 0) {
-        $stillPending = @{}
-        foreach ($id in $pendingIds) { if ($seen.ContainsKey($id)) { $stillPending[$id] = $true } }
-        $seen = $stillPending
-    }
-
-    if ($MaxMinutes -gt 0 -and ((Get-Date) - $startTime).TotalMinutes -ge $MaxMinutes) {
-        Set-Content -Path $ledgerPath -Value (@($seen.Keys)) -Encoding UTF8
-        Remove-Lock
-        Write-Output ("[WATCHER] {0}: max runtime ({1} min) reached, no new tasks. Re-arm to keep watching:" -f $Owner, $MaxMinutes)
-        Write-Output $reArm
-        exit 0
-    }
-
-    Touch-Lock                       # heartbeat
-    Start-Sleep -Seconds $IntervalSeconds
-}
-```
+Прежняя пара скриптов push-watcher'а поверх Tasks-store: `Get-PendingTasks.ps1`
+(читалка pending-задач одного owner, тот же фильтр, что у старого hook'а) +
+`wait-for-task.ps1` (спящий фоновый watcher с per-owner леджером
+`.watcher-state/seen-<owner>.txt` и heartbeat-lock). **Заменены** режимом
+`pool watch`: он читает `<bus>/<owner>/new/`, а состояние держит внутри `<bus>`
+(`.ledger/` + `.watch/`) — отдельные файлы больше не нужны. Инварианты
+(идемпотентный перевзвод через леджер, singleton через heartbeat-lock,
+дисциплина «перевзвод — ШАГ 1») перенесены в `pool watch`; их описание —
+в [Pool Communication §7.5](pool-communication.md).
 
 ---
 
@@ -546,80 +368,12 @@ while ($true) {
 
 Вызывается автоматически из `pool-launch.ps1` (блок «Task-store hygiene» в §3) при старте/резюме каждой сессии, `-ListId $env:CLAUDE_CODE_TASK_LIST_ID` → чистит только пул этой сессии. Однократно на запуск; общий список подрезает старт любого peer'а. Разовая большая чистка — вручную `-MinAgeHours 0`, затем `/compact` открытым сессиям.
 
-```powershell
-# archive-completed-tasks.ps1
-# Task-store janitor. Moves COMPLETED task JSONs out of the live pool task-store
-# into a sibling "<ListId>-archive" directory, so Claude Code's built-in task-list
-# context injection (whole list_id, completed included, no owner filter) stays small.
-#
-# Safety: only status=completed older than -MinAgeHours are moved (recent completions
-# stay so a peer can still TaskGet what it just closed); unparseable/mid-write files are
-# skipped; move (not delete) -> reversible; a Move that races a CLI write just retries
-# next run. Collision-safe: the harness REUSES ids after archiving (max+1 over the
-# shrunken live store, blind to the archive), so live and archive can clash; an existing
-# archived <id>.json is never overwritten -> the clone is archived as <id>.dupN.json.
-# The archive dir is a sibling, NOT a subdir of the list dir, and its name is
-# not a list_id any session uses -> the harness never injects it.
-
-param(
-    [Parameter(Mandatory)][string]$ListId,
-    [string]$TasksRoot   = (Join-Path $env:USERPROFILE '.claude\tasks'),
-    [int]   $MinAgeHours = 12,
-    [switch]$Quiet
-)
-
-$ErrorActionPreference = 'Continue'
-
-$src = Join-Path $TasksRoot $ListId
-$dst = Join-Path $TasksRoot ($ListId + '-archive')
-
-if (-not (Test-Path $src)) {
-    if (-not $Quiet) { Write-Host "[task-janitor] store not found: $src" }
-    exit 0
-}
-
-$cutoff = (Get-Date).AddHours(-[math]::Abs($MinAgeHours))
-$moved  = 0
-$failed = 0
-
-Get-ChildItem -Path $src -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
-    $file = $_
-    if ($file.LastWriteTime -ge $cutoff) { return }   # too fresh -> keep
-    try {
-        $raw  = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop
-        $task = $raw | ConvertFrom-Json -ErrorAction Stop
-    } catch {
-        return   # unparseable / mid-write -> never touch
-    }
-    if ($task.status -ne 'completed') { return }
-    if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
-
-    # Collision-safe destination: never overwrite an id already in the archive
-    # (the harness reuses ids after archiving, so live and archive can clash).
-    $destPath = Join-Path $dst $file.Name
-    if (Test-Path -LiteralPath $destPath) {
-        $stem = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
-        $ext  = [System.IO.Path]::GetExtension($file.Name)
-        $n = 1
-        do {
-            $destPath = Join-Path $dst ('{0}.dup{1}{2}' -f $stem, $n, $ext)
-            $n++
-        } while (Test-Path -LiteralPath $destPath)
-    }
-
-    try {
-        Move-Item -LiteralPath $file.FullName -Destination $destPath -ErrorAction Stop
-        $moved++
-    } catch {
-        $failed++   # likely a concurrent CLI write -> skip, retry next run
-    }
-}
-
-if (-not $Quiet) {
-    Write-Host "[task-janitor] $ListId : archived $moved completed task(s) older than ${MinAgeHours}h (failed $failed)"
-}
-exit 0
-```
+Полный рабочий скрипт (со всеми safety-проверками выше) — шаблон
+[`../scripts/templates/archive-completed-tasks.ps1.template`](../scripts/templates/archive-completed-tasks.ps1.template),
+копируется в `<workspace-root>\scripts\archive-completed-tasks.ps1` при
+заведении пула. Ещё один инвариант из кода: каталог архива — **сосед**
+`<list>-archive`, а не подпапка `<list>/`, и его имя не является `list_id`
+ни одной сессии → харнесс его не инжектит, чистка контекста работает.
 
 ---
 

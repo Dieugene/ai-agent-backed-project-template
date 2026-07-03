@@ -1,56 +1,60 @@
-# Pool Patterns — Knowledge Base
+# Workspace Organization — Knowledge Base
 
-Эта ветка — **обезличенный knowledge base** по организации workspace с
-командой Claude Code сессий, работающих параллельно (multi-peer pool).
-Не шаблон проекта. Не запускается через `/launch-project`. Читается по
-ссылке.
+Эта ветка — **обезличенная база знаний** по организации рабочего пространства, в котором
+команда сессий Claude Code работает параллельно (multi-peer pool) под управлением
+человека-владельца. Не шаблон проекта, не запускается через `/launch-project` — читается по
+ссылке и служит референсом, чтобы поднять такое пространство **с нуля на новой машине**.
 
-Сценарий ортогонален основным веткам этого репозитория:
+Выросла из паттернов координации пулов и теперь покрывает организацию целиком: настройку
+среды Claude Code, систему скилов, файловую координацию пулов (maildir-шина), запуск и
+мониторинг, роли, разделение DevOps, стиль работы — и **рабочий код** инфраструктуры.
+
+Сценарий ортогонален основным веткам репозитория-шаблона:
 
 | Ветка | Сценарий |
 |-------|----------|
 | `main` | Точка входа: `/launch-project` slash-command, README, branch-switch-guide |
 | `iterative` | Single-developer, итеративная разработка (analyst → architect → developer → reviewer) |
 | `specified` | Single-developer, spec-driven с Tech Lead'ом (architect → tech-lead → developer → reviewer) |
-| **`pool-patterns`** (эта) | **Multi-peer pool**: N специализированных peer-агентов координируются через Tasks API + общий mailbox + UserPromptSubmit hook |
+| **`pool-patterns`** (эта) | **Multi-peer pool** + организация рабочего пространства: N специализированных peer-агентов координируются через файловую **maildir pool-шину** (общая CLI-команда `pool`) + UserPromptSubmit hook |
 
 ## С чего начать
 
-→ [`docs/README.md`](docs/README.md) — индекс knowledge base с описанием
-каждого документа и тремя путями входа (только знакомитесь / поднимаете
-pool с нуля / разбираете production-инцидент).
+→ [`docs/README.md`](docs/README.md) — индекс базы знаний: описание каждого документа,
+группировка по темам и три пути входа (только знакомитесь / поднимаете пространство с нуля /
+разбираете production-инцидент).
 
 ## Что внутри
 
-В `docs/` — 8 документов:
+**`docs/`** — база знаний, сгруппированная по темам:
 
-- `workspace-organization.md` — монорепо variants A/B, plain vs pool режим.
-- `pool-communication.md` — координационный стандарт pool (Tasks API,
-  mailbox, hook, **инвариант top-level `owner`**).
-- `tech-lead-mode.md` — subagent-driven Tech Lead и superpowers-скилы.
-- `wrapper-and-hook-scripts.md` — полный рабочий код `pool-launch.ps1`
-  и `inject-inbox.ps1`.
-- `intra-project-pool-recipe.md` — пошаговый bootstrap pool с нуля.
-- `devops-two-layer.md` — server-wide orchestrator + per-monorepo split.
-- `lessons-learned.md` — 16 антипаттернов с реальной практики.
-- `sre-self-healing-pipeline.md` — замкнутый контур самовосстановления
-  AI-сервисов (опубликовано ранее).
+- **Основа** — Windows/PowerShell-гочи, работа с секретами, глобальный предохранитель против
+  катастрофического `rm`, настройка среды (effort, статус-лайн, постоянные сессии, память,
+  браузер-изоляция), система скилов (тонкие стабы + `.references` + инжектор `ref.ps1`).
+- **Организация workspace** — монорепо variants A/B, plain vs pool режим, анатомия, bootstrap.
+- **Пулы** — координационный стандарт (maildir-шина, инвариант доставки), инфра-скрипты и ядро
+  `pool.ps1`, терминальный пикер + Warp, доска и вотчер, скаффолдеры, тиры стандарта L1/L2,
+  пошаговый recipe, антипаттерны с практики.
+- **Роли** — subagent-driven Tech Lead, QA-peer.
+- **DevOps** — двухслойная модель (оркестратор + per-monorepo), контур самовосстановления.
+- **Стиль работы** — рабочие принципы (субагенты вместо контекста, автономность),
+  соразмерность инструмента задаче.
 
-В `commands/` — переиспользуемые **slash-команды** Claude Code (готовые
-промпт-шаблоны, кладутся в `~/.claude/commands/`):
+**`scripts/`** — обезличенный **рабочий код** инфраструктуры (шина `pool.ps1`, пикер
+`launch-pool.ps1`, инжектор `ref.ps1`, скаффолдеры `new-pool.ps1`/`add-peer.ps1`,
+rm-guard `block-dangerous-rm.ps1`, доска/нотификатор, шаблоны) + [инструкция установки](scripts/README.md).
 
-- `handoff-myself.md` — handoff агента самому себе перед `/compact` или
-  закрытием сессии (поддерживает мульти-агентные пулы). См.
-  [`commands/README.md`](commands/README.md).
+**`commands/`** — переиспользуемые **slash-команды** Claude Code (готовые промпт-шаблоны,
+кладутся в `~/.claude/commands/`), напр. `handoff-myself.md`. См. [`commands/README.md`](commands/README.md).
 
 ## Анонимизация
 
-Все идентификаторы — placeholder'ы: `<workspace-root>`, `<pool-name>`,
-`<role>-<scope>`, `<vps-ip>`. Никаких реальных хостов, путей, имён
-подпроектов. Примеры обозначены как «из практики».
+Все идентификаторы — placeholder'ы: `<workspace-root>`, `<user-home>`, `<pool-name>`,
+`<role>-<scope>`, `<vps-ip>`. Никаких реальных хостов, путей, имён подпроектов, секретов.
+Примеры из живой практики обозначены как «из практики». Скрипты используют `<workspace-root>`
+как заглушку корня — перед использованием замените на свой путь (см. [`scripts/README.md`](scripts/README.md)).
 
 ## Для других сценариев
 
-Если ищете шаблон проекта под single-developer workflow — переключитесь
-на ветку `main` и читайте `README.md` там (про `/launch-project` + ветки
-`iterative`/`specified`).
+Ищете шаблон проекта под single-developer workflow — переключитесь на ветку `main` и читайте
+`README.md` там (про `/launch-project` + ветки `iterative`/`specified`).

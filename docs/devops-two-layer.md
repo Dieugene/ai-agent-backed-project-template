@@ -187,8 +187,16 @@ DevOps-ответственность между двумя независимы
   своего монорепо; A читает для агрегации.
 - **`runbooks/` (в A)** — A публикует стандарты (например,
   `safe-deploy-standard.md`); B следует.
-- **Tasks API + `.inbox/` self-healing pipeline'а** — A диспетчеризует
-  инциденты в B через task'у с правильным `owner` (за самим B).
+- **Pool-шина (maildir)** — если оба слоя запущены как pool-агенты,
+  координация (диспетч инцидентов self-healing pipeline'а, просьба правки
+  в чужой зоне) идёт по шине: `pool send -To <owner> -From <self> -Subject
+  "…" -BodyFile <файл.md>` — сообщение атомарно ложится в
+  `<bus>/<owner>/new/` получателя (получатель = ПАПКА, мис-оунинга нет),
+  ответ — `pool reply`. См. [Pool Communication §4](pool-communication.md).
+- **Файловый брифинг** — разовый документ-бриф, а не координационное
+  сообщение (напр. per-monorepo DevOps → оркестратор с запросом/вводными
+  или онбординг нового per-monorepo DevOps): кладётся файлом в
+  `.devops/inbox/<slug>.md` получателя. Это артефакт async-канала, не пул.
 - **Через пользователя** — если что-то спорное или новое (например, B
   хочет добавить новую общую систему), эскалация к пользователю, не
   прямая модификация зоны A.
@@ -272,7 +280,8 @@ Handoff одной → в `<server-state>/HANDOFF.md` (A), handoff другой 
   доступ к файлам).
 - B знает, как подключиться к общим сервисам (через `<server-state>/runbooks/`).
 - Self-healing контур (если есть) корректно диспетчеризует инциденты в
-  правильный per-monorepo агент (по `owner` в Tasks API).
+  правильный per-monorepo агент (по адресу получателя на шине —
+  `<bus>/<owner>/new/`).
 
 ---
 
@@ -292,7 +301,7 @@ Handoff одной → в `<server-state>/HANDOFF.md` (A), handoff другой 
 политику.
 
 **Митигация:** строгая граница из §4. Любая правка чужой зоны — через
-`TaskCreate(owner=<нужный слой>)`, не прямая.
+просьбу на pool-шине (`pool send -To <нужный слой>`), не прямая.
 
 ### 3. Дублирование REGISTRY между слоями
 
@@ -321,7 +330,7 @@ Postgres. Если репо случайно станет публичным и�
 - [Workspace Organization](workspace-organization.md) — общая модель
   workspace, в которой работает слой B.
 - [Pool Communication](pool-communication.md) — если оба слоя в pool, они
-  координируются через Tasks API.
+  координируются через maildir pool-шину.
 - `sre-self-healing-pipeline.md` (в этом же knowledge base) — детальная
   реализация self-healing контура для слоя A.
 - [Lessons Learned](lessons-learned.md) — DevOps-related грабли.

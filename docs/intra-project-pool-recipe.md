@@ -17,9 +17,10 @@ Organization §8](workspace-organization.md#8-bootstrap-нового-workspace).
 > Координация в пуле идёт через общую команду `pool` (pool-CLI) поверх
 > шины `<bus>` (`POOL_BUS_ROOT`): сообщение = immutable-файл, адрес = папка
 > `<bus>/<owner>/new/`. Hook на входящие — `pool hook`. **Канонический путь
-> поднять пул — скаффолдер** (одна команда генерит весь bus-native каркас
-> из спеки, §2.0); ручная сборка ниже — fallback для существующего
-> нестандартного монорепо. Личные todo остаются на Tasks API.
+> поднять пул — скаффолдер `new-pool.ps1`** (одна команда генерит весь
+> bus-native каркас из спеки, §2.0; детали — [Pool
+> Scaffolding](pool-scaffolding.md)); ручная сборка ниже — fallback для
+> существующего нестандартного монорепо. Личные todo остаются на Tasks API.
 
 > Все идентификаторы — placeholder'ы. Сценарий ниже описывает поднятие
 > пула из 4 peer'ов в подпроекте `<sub>`: `architect-<sub>`,
@@ -83,12 +84,14 @@ qa). Усложнение — по мере появления потребно�
 
 ### 2.0. Основной путь — скаффолдер (одна команда)
 
-**Канонический способ поднять bus-native пул — скаффолдер**: одна команда
-генерит весь каркас из спеки (`spec.json`: имя пула, лид, заголовок, список
-ролей `owner`+`label`).
+**Канонический способ поднять bus-native пул — скаффолдер
+[`new-pool.ps1`](../scripts/new-pool.ps1)**: одна команда генерит весь
+каркас из спеки (`spec.json`: имя пула, лид, заголовок, список ролей
+`owner`+`label`). Полное устройство скаффолдера, спеки и неразрушающего
+merge в непустую папку — [Pool Scaffolding](pool-scaffolding.md).
 
 ```
-<pool-scaffolder> -Spec <spec.json>
+..\scripts\new-pool.ps1 -Spec <spec.json>
 ```
 
 Что он генерит (всё уже рабочее): `<bus>` (ленивый maildir),
@@ -146,28 +149,28 @@ TASK_LIST_ID: `<sub>-pool` (личные todo).
 `<sub>-pool` — intra-project pool из N peer-агентов:
 
 - `claude-architect-<sub>.bat` → ты `architect-<sub>`. **Прочитай:**
-  [`_agent_pool_setup-architect.md`](_agent_pool_setup-architect.md).
+  `_agent_pool_setup-architect.md`.
   При возобновлении — также
-  [`_handoff_architect-<sub>.md`](_handoff_architect-<sub>.md).
+  `_handoff_architect-<sub>.md`.
 - `claude-frontend-<sub>.bat` → ты `frontend-<sub>`. **Прочитай:**
-  [`_agent_pool_setup-frontend.md`](_agent_pool_setup-frontend.md).
-  При возобновлении — [`_handoff_frontend-<sub>.md`](_handoff_frontend-<sub>.md).
+  `_agent_pool_setup-frontend.md`.
+  При возобновлении — `_handoff_frontend-<sub>.md`.
 - `claude-backend-<sub>.bat` → ты `backend-<sub>`. **Прочитай:**
-  [`_agent_pool_setup-backend.md`](_agent_pool_setup-backend.md).
-  При возобновлении — [`_handoff_backend-<sub>.md`](_handoff_backend-<sub>.md).
+  `_agent_pool_setup-backend.md`.
+  При возобновлении — `_handoff_backend-<sub>.md`.
 - `claude-qa-<sub>.bat` → ты `qa-<sub>`. **Прочитай:**
-  [`_agent_pool_setup-qa.md`](_agent_pool_setup-qa.md). При возобновлении
-  — [`_handoff_qa-<sub>.md`](_handoff_qa-<sub>.md).
+  `_agent_pool_setup-qa.md`. При возобновлении
+  — `_handoff_qa-<sub>.md`.
 
 После своего setup-файла —
-[`00_docs/architecture/agent-pool-zones.md`](00_docs/architecture/agent-pool-zones.md)
+`00_docs/architecture/agent-pool-zones.md`
 (разделение зон). Затем `00_docs/specs/` (детали проекта).
 
 Признак активного pool-режима — баннер `[POOL INBOX] <owner>: ...` в
 блоке `<user-prompt-submit-hook>`. Если нет — диагностика в
 `<workspace-root>/scripts/README.md`.
 
-Полный стандарт — [Pool Communication](<path-to-this-knowledge-base>/pool-communication.md).
+Полный стандарт — [Pool Communication](pool-communication.md).
 ```
 
 ### Шаг 4. Wrapper-батники
@@ -249,7 +252,7 @@ pool send -To <сосед> -From <role>-<sub> -Subject "<тема>" -BodyFile <�
 
 Сообщение атомарно появляется в `<bus>/<сосед>/new/` — никакого второго
 шага. Отчёт по входящей задаче — `pool reply -InReplyTo <id>` (не закрытие
-чужой задачи). См. [Pool Communication §4](<path>/pool-communication.md).
+чужой задачи). См. [Pool Communication §4](pool-communication.md).
 
 ## Личные todo
 
@@ -339,7 +342,33 @@ QA не пишет автотесты (Playwright/Vitest), не правит к�
 ## 4. Расширение pool: добавление нового peer'а в существующий
 
 Когда нужен ещё один peer (например, второй backend с специализацией на
-поиске):
+поиске).
+
+### Основной путь — `add-peer.ps1`
+
+**Канонический способ — скаффолдер
+[`add-peer.ps1`](../scripts/add-peer.ps1)** (брат `new-pool.ps1` для
+добавления одной роли в **живой** пул). Он детерминированно вшивает всю
+механику: `claude-<новый>-<sub>.bat` (клон соседнего wrapper'а),
+`.warp/workflows/<новый>.yaml`, вставку роли в `pool.manifest.json` (→
+пикер + раскладка Warp) и setup-скелет. То, что требует человеческого
+взгляда (bullet в CLAUDE.md, routing-строку, раздел зон, строку memory),
+отдаёт paste-ready сниппетами в `_add-peer-<новый>.snippets.md`. `-DryRun`
+печатает план без записи. Полное устройство — [Pool
+Scaffolding §3](pool-scaffolding.md).
+
+```
+..\scripts\add-peer.ps1 -Manifest <pool.manifest.json> -Owner <новый>-<sub> `
+    -Title "<заголовок>" -Display <SessionTitle> -Mission "<миссия>" `
+    -Zone <relpath> -After <сосед> [-DryRun]
+```
+
+После прогона: вставить сниппеты руками (там доменное суждение — граница
+новой роли против соседей), запустить wrapper, smoke-тест координации.
+
+### Ручной fallback (нестандартный монорепо или без манифеста)
+
+Если `add-peer.ps1` не подходит:
 
 1. Решить naming: `backend-search-<sub>` (если специализация),
    `backend2-<sub>` (если просто дублёр).
@@ -355,9 +384,9 @@ QA не пишет автотесты (Playwright/Vitest), не правит к�
 7. Запустить wrapper нового peer'а, smoke-тест координации с существующим
    peer'ом этой же роли.
 
-**Что НЕ делать:** не править зону существующего peer'а «под нового» из
-parent-сессии. Если граница пересматривается — это `pool send -To <тот
-peer>` с обоснованием, не прямая правка его файлов.
+**Что НЕ делать (оба пути):** не править зону существующего peer'а «под
+нового» из parent-сессии. Если граница пересматривается — это `pool send
+-To <тот peer>` с обоснованием, не прямая правка его файлов.
 
 ---
 
@@ -379,6 +408,8 @@ peer>` с обоснованием, не прямая правка его фай
 
 ## 6. Связанные документы
 
+- [Pool Scaffolding](pool-scaffolding.md) — `new-pool.ps1` (весь пул) и
+  `add-peer.ps1` (одна роль в живой пул); детали спеки, merge, сниппетов.
 - [Pool Communication](pool-communication.md) — координационный стандарт.
 - [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md) — pool-инфра.
 - [Workspace Organization](workspace-organization.md) — общая модель

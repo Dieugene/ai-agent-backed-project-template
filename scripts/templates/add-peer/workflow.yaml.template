@@ -1,0 +1,5 @@
+---
+name: "> Запустить: {{TITLE}}"
+command: 'cmd /c "{{ROOT}}\{{BAT}}"'
+description: "Старт агента '{{OWNER}}' ({{TITLE}}) пула {{SLUG}} в текущей панели"
+tags: ["pool:{{SLUG}}"]

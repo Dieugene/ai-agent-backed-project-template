@@ -1,0 +1,97 @@
+# archive-completed-tasks.ps1
+#
+# NOT deprecated. Coordination moved to the maildir pool bus (pool.ps1); this
+# janitor now only keeps PERSONAL todos (Tasks API, metadata.kind='personal')
+# from accumulating completed entries — the personal-todo store is still on
+# Tasks API and still gets injected whole each turn.
+#
+# Task-store janitor. Moves COMPLETED task JSONs out of the live pool task-store
+# into a sibling "<ListId>-archive" directory.
+#
+# Why: Claude Code's built-in task system injects the ENTIRE task list_id into
+# context as a system-reminder almost every turn, INCLUDING completed tasks, and
+# with NO per-owner filtering (the `owner` field is our convention, the harness
+# ignores it). A shared pool list that accumulates completed tasks therefore
+# bloats every peer's context (hundreds of tasks ~= 10-15k tokens/turn). Keeping
+# the live list small is the only lever (there is no setting to silence the
+# reminder while keeping TaskCreate/TaskList).
+#
+# Safety:
+#   - Read-only on active tasks: only status=completed files are moved.
+#   - Only files OLDER than -MinAgeHours are moved (recent completions stay put,
+#     so a peer can still TaskGet a task it just closed).
+#   - Unparseable / mid-write files are skipped, never touched.
+#   - Move (not delete) -> fully reversible; copy a file back to restore.
+#   - Collision-safe: the harness REUSES internal ids after we archive (it assigns
+#     max+1 over the shrunken LIVE store, blind to the archive), so a fresh task can
+#     carry an id already sitting in the archive. We NEVER overwrite an existing
+#     archived <id>.json; a clashing id is archived as <id>.dupN.json so both survive
+#     (otherwise the older archived task would be silently lost, breaking the
+#     "fully reversible" guarantee above).
+#   - Concurrency-safe enough: a Move that races a CLI write just fails and is
+#     retried next run.
+#
+# The archive dir is a sibling, NOT a subdir of the list dir, and its name is not
+# a list_id any session uses -> the harness never injects it.
+#
+# Invoked automatically from pool-launch.ps1 at session start; can also be run
+# by hand: powershell -NoProfile -File archive-completed-tasks.ps1 -MinAgeHours 0
+
+param(
+    [string]$ListId      = 'my-pool',
+    [string]$TasksRoot   = (Join-Path $env:USERPROFILE '.claude\tasks'),
+    [int]   $MinAgeHours = 12,
+    [switch]$Quiet
+)
+
+$ErrorActionPreference = 'Continue'
+
+$src = Join-Path $TasksRoot $ListId
+$dst = Join-Path $TasksRoot ($ListId + '-archive')
+
+if (-not (Test-Path $src)) {
+    if (-not $Quiet) { Write-Host "[task-janitor] store not found: $src" }
+    exit 0
+}
+
+$cutoff = (Get-Date).AddHours(-[math]::Abs($MinAgeHours))
+$moved  = 0
+$failed = 0
+
+Get-ChildItem -Path $src -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
+    $file = $_
+    if ($file.LastWriteTime -ge $cutoff) { return }   # too fresh -> keep
+    try {
+        $raw  = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop
+        $task = $raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return   # unparseable / mid-write -> never touch
+    }
+    if ($task.status -ne 'completed') { return }
+    if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+
+    # Collision-safe destination: never overwrite an id already in the archive.
+    # (The harness reuses ids after archiving, so live and archive can clash.)
+    $destPath = Join-Path $dst $file.Name
+    if (Test-Path -LiteralPath $destPath) {
+        $stem = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+        $ext  = [System.IO.Path]::GetExtension($file.Name)
+        $n = 1
+        do {
+            $destPath = Join-Path $dst ('{0}.dup{1}{2}' -f $stem, $n, $ext)
+            $n++
+        } while (Test-Path -LiteralPath $destPath)
+    }
+
+    try {
+        Move-Item -LiteralPath $file.FullName -Destination $destPath -ErrorAction Stop
+        $moved++
+    } catch {
+        $failed++   # likely a concurrent CLI write -> skip, retry next run
+    }
+}
+
+if (-not $Quiet) {
+    Write-Host "[task-janitor] $ListId : archived $moved completed task(s) older than ${MinAgeHours}h (failed $failed)"
+}
+exit 0

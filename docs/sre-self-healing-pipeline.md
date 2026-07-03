@@ -65,7 +65,7 @@ flowchart TB
     subgraph LOCAL["💻 Локальная машина разработчика"]
         DISP["Диспетчер инцидентов<br/>(Task Scheduler / cron)"]
         POOLS["Пулы Claude Code<br/>(tech-lead'ы проектов)"]
-        DISP -->|"task-файлы"| POOLS
+        DISP -->|"pool-сообщение<br/>в шину"| POOLS
     end
 
     TG["📱 Telegram"]
@@ -188,9 +188,18 @@ related_incidents: [<id>, ...]
    - если `status ∉ {open, acked}` — пропустить;
    - по полю `project` ищет в таблице маршрутизации соответствующий
      **пул / owner / launcher**;
-   - idempotency-проверка: если задача с этим ID уже есть в пуле — пропустить;
-   - **атомарно** пишет task-файл в очередь пула
-     (`~/.claude/tasks/<pool>/<id>.json`).
+   - idempotency-проверка: если сообщение по этому INC уже есть в шине
+     пула (`<bus>/<owner>/`) — пропустить;
+   - **атомарно** кладёт инцидент в шину пула как pool-сообщение в
+     `<bus>/<owner>/new/` (получатель = папка owner'а) — так его увидит
+     `pool hook` и покажет в `[POOL INBOX]`. Пишется через `pool send`
+     (атомарный `tmp`→`new` rename и UTF-8 гарантирует pool-CLI), не прямой
+     правкой каталога.
+
+   > Примечание: доставка инцидента показана в целевой модели — через
+   > pool-шину. Если ваш диспетчер исторически писал в отдельный task-store
+   > (`~/.claude/tasks/<pool>/`), мигрируйте канал доставки на
+   > `<bus>/<owner>/new/`, чтобы `pool hook` увидел инцидент.
 4. Сохраняет текущий `HEAD` в state-файл (idempotency между запусками).
 5. Печатает консольное summary:
    - если нового нет → «контур работает штатно», окно закрывается само;
@@ -216,10 +225,12 @@ Telegram-бот (`@BotFather`), токен и chat_id — в секретах wo
 ### 4.6. Пулы Claude Code
 
 Пул — это связка из нескольких ролей-агентов (tech-lead, devops и т.п.),
-работающих над одним проектом и обменивающихся задачами через файловую очередь
-(`~/.claude/tasks/<pool>/`). Диспетчер просто кладёт в эту очередь task-файл со
-ссылкой на INC; при следующем запуске пула нужный агент видит баннер
-`[POOL INBOX] <owner>: N pending` и берёт инцидент в работу.
+работающих над одним проектом и обменивающихся задачами через файловую
+**pool-шину** (maildir-каталог `<bus>`, `POOL_BUS_ROOT`; см. [Pool
+Communication](pool-communication.md)). Диспетчер кладёт в шину
+pool-сообщение со ссылкой на INC — в `<bus>/<owner>/new/` нужного агента;
+при следующем запуске пула его hook (`pool hook`, читает `new/`) показывает
+баннер `[POOL INBOX] <owner>: N pending`, и агент берёт инцидент в работу.
 
 ---
 
@@ -249,7 +260,7 @@ sequenceDiagram
     Note over Disp: расписание, daily (со сдвигом)
     Disp->>Repo: git pull
     Disp->>Disp: diff → новые INC,<br/>маршрутизация project → pool
-    Disp->>Pool: atomic write task-файла в очередь
+    Disp->>Pool: atomic write pool-сообщения в шину owner'а (new/)
     Human->>Pool: запуск launcher'а
     Pool->>Human: [POOL INBOX] pending: ссылка на INC
     Human->>Human: triage, фикс кода, деплой

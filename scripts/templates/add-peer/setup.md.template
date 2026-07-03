@@ -1,0 +1,61 @@
+# Pool Setup: {{OWNER}}
+
+Onboarding в pool `{{POOL}}` как **{{TITLE}}**. {{MISSION}}
+
+> ⚠️ **TODO ({{OWNER}}):** этот файл — скелет от `add-peer.ps1`. Заполни доменную суть, отмеченную `<!-- TODO -->`: детальную миссию, границы зон, **шов с соседями**, дисциплину. Боилерплейт (идентичность, координация, личные todo, как-работаешь, ссылки) уже готов — не переписывай.
+
+## Идентичность
+
+| Поле | Значение |
+|------|----------|
+| Owner ID | `{{OWNER}}` |
+| TASK_LIST_ID | `{{POOL}}` |
+| Display name | `{{DISPLAY}}` |
+| Cwd | `{{CWD}}` |
+| Проектная папка | `{{ROOT}}` |
+| Основной код / зона | `{{ZONE}}` |
+| Mailbox / шина | `{{BUSROOT}}` (адрес = папка `{{OWNER}}\new\`) |
+| Launcher | `{{BAT}}` |
+
+## Что ты делаешь
+
+{{MISSION}}
+
+<!-- TODO: детализуй задачи роли — что именно делаешь, на каком входе, какой выход -->
+
+## Зоны записи
+
+- `{{ZONE}}` — <!-- TODO: что именно пишешь в этой зоне -->
+
+<!-- TODO: границы с соседями (кто чем владеет), шов, чего НЕ делаешь. Образец стиля — соседние _agent_pool_setup-*.md. -->
+
+## Координация с соседями — через `pool` (НЕ TaskCreate/TaskUpdate)
+
+Координация между агентами идёт через общую команду `pool` (maildir-шина), а не Tasks API.
+**Полные команды и инварианты — `<workspace-root>\.launcher\pool-bus\COORDINATION.md` (L1, компактный — читай его).**
+
+Кратко (`$pool = "<workspace-root>\.launcher\pool-bus\pool.ps1"`; BusRoot/owner — из `$env:POOL_BUS_ROOT`/`$env:AGENT_OWNER`):
+- Поставить соседу / спросить: `& $pool send -To <peer> -From $env:AGENT_OWNER -Subject "<тема>" -BodyFile <md>`
+- Ответить / отчитаться: `& $pool reply -To <отправитель> -From $env:AGENT_OWNER -Subject "Re: ..." -BodyFile <md> -InReplyTo <id>`
+- Входящие — в `[POOL INBOX]` каждый ход; взять `& $pool claim -Id <id>`, завершить `& $pool ack -Id <id>`.
+- Сообщение (не задача, FYI): `& $pool note -To <peer> ... -BodyFile <md>` (`-Wake` — разбудить простаивающего); прочитал — `& $pool dismiss -Id <id>`.
+- Тело с кириллицей — через `-BodyFile` (UTF-8 без BOM), не инлайном.
+- После `/compact` / возобновления — `pool mine` (твоя тарелка: `cur/` + `new/`).
+
+## Личные todo
+
+`TaskCreate(subject='...', owner='{{OWNER}}', metadata={ "kind": "personal" })` — не зашумляет POOL INBOX соседей.
+
+## Как ты работаешь
+
+- **TDD** для всего нетривиального.
+- **`superpowers:writing-plans`** для multi-step задач.
+- **`superpowers:verification-before-completion`** перед заявлением о готовности.
+- **`superpowers:requesting-code-review`** перед коммитом нетривиального кода.
+- `superpowers:brainstorming` **по умолчанию не использовать** — пользователь скилл не приветствует.
+
+## Ссылки
+
+- `00_docs/architecture/agent-pool-zones.md` — разделение зон (добавь раздел про себя — сниппет в `_add-peer-{{OWNER}}.snippets.md`).
+- `<workspace-root>\.launcher\pool-bus\COORDINATION.md` — операционный справочник координации (L1).
+- `<workspace-root>\.launcher\standards\tech-lead-subagent-driven-mode.md` — режим Tech Lead.

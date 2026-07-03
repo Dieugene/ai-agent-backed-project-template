@@ -1,0 +1,20 @@
+@echo off
+REM Wrapper: peer {{AGENT_OWNER}} для подпроекта {{SUBPROJECT_DIR}}.
+REM Bus-native: координация через общую pool-шину (maildir) <workspace-root>\.launcher\pool-bus\pool.ps1.
+REM Выставляет env vars для pool-режима и стартует Claude через pool-launch.ps1,
+REM который при наличии прошлой сессии с таким же display name автоматически
+REM делает --resume <session-id>; иначе стартует свежую сессию с --name.
+REM
+REM Цепочка: cmd.exe (set ...) -> powershell -NoProfile -> claude.exe -> hook (pool.ps1 hook).
+REM env vars наследуются от cmd через powershell к claude и к hook'у.
+
+set AGENT_OWNER={{AGENT_OWNER}}
+set CLAUDE_CODE_TASK_LIST_ID={{TASK_LIST_ID}}
+set POOL_BUS_ROOT={{WORKSPACE_ROOT}}\.bus
+set POOL_INBOX_QUIET=1
+REM --- Только для ЛИДА пула: раскомментируй строку ниже, чтобы при старте лида
+REM     автоматически открывалась живая доска пула в отдельном окне (идемпотентно).
+REM powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\.launcher\pool-bus\board-window.ps1" -BusRoot "{{WORKSPACE_ROOT}}\.bus"
+cd /d {{WORKSPACE_ROOT}}
+powershell -NoProfile -ExecutionPolicy Bypass -File "{{WORKSPACE_ROOT}}\scripts\pool-launch.ps1" -SessionTitle "{{SESSION_TITLE}}"
+if errorlevel 1 pause

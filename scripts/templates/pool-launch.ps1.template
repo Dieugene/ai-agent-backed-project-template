@@ -1,0 +1,80 @@
+# pool-launch.ps1
+# Launcher for Claude Code in agent-pool mode with automatic session resume.
+#
+# Behavior:
+#   1. Looks up the most recently used session in this project whose customTitle
+#      (assigned via /rename or --name) matches $SessionTitle.
+#   2. If found — runs `claude --dangerously-skip-permissions --resume <session-id>`.
+#   3. If not found — starts a fresh session with `--name <SessionTitle>` so that
+#      next launch can resume it automatically.
+#
+# Env vars from the parent cmd.exe (AGENT_OWNER, CLAUDE_CODE_TASK_LIST_ID,
+# POOL_BUS_ROOT, POOL_INBOX_QUIET) are inherited into this PowerShell process and
+# into the spawned `claude` process — this is what activates pool mode. Coordination
+# itself runs on the shared maildir bus (pool.ps1 hook); see COORDINATION.md.
+#
+# Invoked by scripts\claude-<subproject>-<role>.bat. Runs with -NoProfile so the user's
+# PowerShell $PROFILE (and any aliases) is not loaded.
+
+param(
+    [Parameter(Mandatory)][string]$SessionTitle,
+    [string]$ProjectKey = '{{PROJECT_KEY}}'
+)
+
+$ErrorActionPreference = 'Continue'
+
+# Task-store hygiene (best-effort, never blocks launch): archive completed PERSONAL
+# todos so Claude Code's built-in task-list context injection (whole list_id,
+# completed included, no owner filter) stays small. Coordination is on the maildir
+# bus now; this only touches the personal-todo store. See archive-completed-tasks.ps1.
+try {
+    $janitor = Join-Path $PSScriptRoot 'archive-completed-tasks.ps1'
+    if ((Test-Path $janitor) -and $env:CLAUDE_CODE_TASK_LIST_ID) {
+        & $janitor -ListId $env:CLAUDE_CODE_TASK_LIST_ID -Quiet
+    }
+} catch { }
+
+$projectDir = Join-Path $env:USERPROFILE ".claude\projects\$ProjectKey"
+
+function Find-SessionIdByTitle {
+    param([string]$Title, [string]$Dir)
+
+    if (-not (Test-Path $Dir)) { return $null }
+
+    $titleEscaped = [regex]::Escape($Title)
+    $matchPattern = '"customTitle":"' + $titleEscaped + '"'
+
+    $files = Get-ChildItem -Path $Dir -Filter '*.jsonl' -ErrorAction SilentlyContinue |
+             Sort-Object LastWriteTime -Descending
+
+    foreach ($f in $files) {
+        try {
+            # Find the LAST customTitle entry in the file and check if it matches.
+            # Sessions can be renamed mid-conversation; the latest rename wins.
+            $titleLines = Select-String -Path $f.FullName `
+                                        -Pattern '"customTitle":"[^"]*"' `
+                                        -ErrorAction Stop
+            if (-not $titleLines) { continue }
+
+            $latest = $titleLines[-1].Line
+            if ($latest -match $matchPattern) {
+                return $f.BaseName
+            }
+        } catch {
+            continue
+        }
+    }
+    return $null
+}
+
+$sessionId = Find-SessionIdByTitle -Title $SessionTitle -Dir $projectDir
+
+if ($sessionId) {
+    Write-Host "[pool-launch] Resuming '$SessionTitle' (session $sessionId)"
+    & claude --dangerously-skip-permissions --resume $sessionId
+} else {
+    Write-Host "[pool-launch] No prior session '$SessionTitle' found - starting fresh."
+    & claude --dangerously-skip-permissions --name $SessionTitle
+}
+
+exit $LASTEXITCODE

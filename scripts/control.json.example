@@ -1,0 +1,26 @@
+[
+    {
+        "schema":  "pool-manifest/v1",
+        "slug":  "launcher",
+        "title":  "Launcher",
+        "project":  "Workspace orchestration",
+        "root":  "<workspace-root>",
+        "color":  "white",
+        "lead":  "launcher",
+        "roles":  [
+                      { "owner": "launcher", "title": "Launcher", "bat": "launcher.bat", "lead": true }
+                  ]
+    },
+    {
+        "schema":  "pool-manifest/v1",
+        "slug":  "devops-orchestrator",
+        "title":  "DevOps Orchestrator",
+        "project":  "Server-wide DevOps",
+        "root":  "<workspace-root>",
+        "color":  "blue",
+        "lead":  "devops-orchestrator",
+        "roles":  [
+                      { "owner": "devops-orchestrator", "title": "DevOps Orchestrator", "bat": "devops-orchestrator.bat", "lead": true }
+                  ]
+    }
+]

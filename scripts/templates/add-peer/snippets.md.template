@@ -1,0 +1,28 @@
+<!-- Сниппеты от add-peer.ps1 для owner={{OWNER}}. Вставь каждый в указанный файл. Секции делятся маркерами `=== NAME ===`. -->
+
+=== BULLET (в список ролей подпроектного CLAUDE.md, в блок «Pool-режим») ===
+- `{{BAT}}` → ты `{{OWNER}}`. {{MISSION}} **Прочитай:** [`_agent_pool_setup-{{OWNER}}.md`](_agent_pool_setup-{{OWNER}}.md). При возобновлении — [`_handoff_{{OWNER}}.md`](_handoff_{{OWNER}}.md).
+
+=== TREE (в ASCII-дерево структуры подпроектного CLAUDE.md) ===
+├── _agent_pool_setup-{{OWNER}}.md    ← onboarding {{OWNER}} ({{TITLE}})
+├── {{BAT}}    ← wrapper {{OWNER}}
+
+=== ROUTING (umbrella CLAUDE.md: добавь owner в routing-строку пула и в Шаг-онбординга) ===
+В routing-таблице: добавь `{{OWNER}}` в список owner'ов строки пула `{{POOL}}` и подними счётчик «N owner'ов».
+В шаге онбординга пула — буллет:
+   - `{{OWNER}}` → `_agent_pool_setup-{{OWNER}}.md` ({{MISSION}}).
+
+=== ZONES (новый раздел в 00_docs/architecture/agent-pool-zones.md) ===
+### `{{OWNER}}` — {{TITLE}}
+
+{{MISSION}}
+
+**Зона записи:**
+- `{{ZONE}}` — <!-- TODO: детализировать -->
+
+**Шов с соседями:** <!-- TODO: кто отдаёт вход, кому отдаёшь выход, чего не трогаешь -->
+
+**Не пишет:** <!-- TODO: чужие зоны -->
+
+=== MEMORY (строка в project_<pool>.md, таблицу ролей; + обнови счётчик в description и MEMORY.md) ===
+| `{{OWNER}}` | `{{DISPLAY}}` | `{{BAT}}` — {{MISSION}} (добавлен {{DATE}}). |
