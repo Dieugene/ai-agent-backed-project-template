@@ -10,7 +10,7 @@
 # Maildir model: one immutable file = one message; recipient = folder; state = folder; transition = atomic rename.
 #   <BusRoot>/<recipient>/{tmp,new,cur}/   new = unread, cur = claimed/in-progress
 #   <BusRoot>/archive/                      acked / terminal
-#   <BusRoot>/.ledger/seen-<owner>.txt      per-recipient watcher ledger (ids already woken on)
+#   <BusRoot>/.ledger/seen-<owner>.txt      per-recipient watcher ledger (note-wake ping ids already woken on; tasks are NOT recorded - claim is their suppressor)
 #   <BusRoot>/.watch/lock-<owner>.txt       watcher singleton heartbeat
 #
 # Owner/BusRoot default to env (AGENT_OWNER / POOL_BUS_ROOT) so the hook and watcher are env-driven.
@@ -184,22 +184,33 @@ function Invoke-Dismiss([string]$o,[string]$mid) {
   Write-Output ("DISMISSED: {0}" -f $mid)
 }
 
-# Watcher detection: wake iff new/<owner>/ holds a file whose id is not in the ledger.
-# Signal = presence + id-ledger (NOT mtime, NOT bare-id-in-shared-store). On fire, ledger := all current new ids.
+# Watcher detection: wake on any pending TASK in new/<owner>/. A task keeps waking every fresh watcher until it is
+# claimed OUT of new/ - the claim (file leaves new/), NOT the fire, is the suppressor. This closes the starvation hole
+# where a task rung once (baseline-on-fire) but not yet claimed - agent busy / wake lost / re-armed before claiming -
+# went silent forever. note-wake is the ONE exception: it is a one-shot ping (dismiss, not claim), so the ledger DOES
+# remember it - wake once, then quiet even while it still sits in new/. Signal = presence in new/ (+ ledger for
+# note-wake only), NOT mtime. On fire, ledger := the note-wake ids currently pending (tasks are deliberately not recorded).
 function Invoke-Check([string]$o) {
   Require-Bus
   $ledger = Join-Path (Ledger-Dir) ("seen-{0}.txt" -f $o)
   $seen = @{}
   if (Test-Path $ledger) { foreach ($l in [System.IO.File]::ReadAllLines($ledger)) { $t = "$l".Trim(); if ($t) { $seen[$t] = $true } } }
-  $ids = @()       # every id currently in new/ (ledger snapshot on fire)
-  $wake = @()      # unseen AND wakeable (tasks + note-wake; quiet notes/migration never wake)
+  $pings = @()     # note-wake ids currently pending (the ONLY kind the ledger suppresses: a one-shot ping, not a task)
+  $wake  = @()     # ids to wake on this pass
   foreach ($f in (Get-ChildItem -Path (Sub-Dir $o 'new') -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
     $p = Parse-MsgName $f.Name; if (-not $p) { continue }
-    $ids += $p.id
-    if (-not $seen.ContainsKey($p.id) -and (Is-Wakeable $f.Name)) { $wake += $p.id }
+    if (-not (Is-Wakeable $f.Name)) { continue }               # quiet note / migration: never wakes
+    if ($p.kind -eq 'note-wake') {
+      $pings += $p.id
+      if (-not $seen.ContainsKey($p.id)) { $wake += $p.id }     # one-shot: wake once, then the ledger keeps it quiet
+    } else {
+      $wake += $p.id                                            # a task: wake every fresh watcher until claimed out of new/
+    }
   }
   if ($wake.Count -gt 0) {
-    [System.IO.File]::WriteAllLines($ledger, [string[]]$ids, $script:U8)
+    # Persist ONLY the note-wake pings. Tasks are intentionally not recorded: their suppressor is the claim
+    # (file leaves new/), so an un-claimed task keeps waking each re-arm instead of starving after one silent fire.
+    [System.IO.File]::WriteAllLines($ledger, [string[]]$pings, $script:U8)
     Write-Output ("[WAKE] {0}: {1} new" -f $o, $wake.Count)
     foreach ($n in $wake) { Write-Output ("   new: {0}" -f $n) }
   } else {
@@ -224,10 +235,17 @@ function Invoke-Watch([string]$o,[int]$interval) {
     $det = Invoke-Check $o
     if (($det -join "`n") -match '\[WAKE\]') {
       if (Test-Path $lock) { Remove-Item $lock -Force -ErrorAction SilentlyContinue }
-      Write-Output ("[WATCH] {0}: new task(s). STEP 1 (do FIRST): re-arm watcher:" -f $o)
+      $ids = @()
+      foreach ($line in $det) { $mm = [regex]::Match($line, 'new:\s*(\S+)'); if ($mm.Success) { $ids += $mm.Groups[1].Value } }
+      # Order is claim -> re-arm -> work (NOT re-arm first). Wake is claim-gated: a task keeps waking every fresh
+      # watcher until it leaves new/, so re-arming BEFORE claiming makes the new watcher re-fire on the same task ->
+      # the agent re-arms in a loop and panics. Claim (ms) moves it to cur/ and breaks that; re-arm still precedes work.
+      Write-Output ("[WATCH] {0}: {1} new task(s)." -f $o, $ids.Count)
+      Write-Output "STEP 1 (do FIRST): claim each below - a claim moves it into your cur/ so this watcher stops re-firing on it (leaving it in new/ makes every re-arm wake you again):"
+      foreach ($n in $ids) { Write-Output ("   {0}   ->  pool.ps1 claim -Owner {1} -Id {0}" -f $n, $o) }
+      Write-Output "STEP 2 (still BEFORE you start working): re-arm the watcher:"
       Write-Output $reArm
-      Write-Output "STEP 2 (after re-arm): handle:"
-      $det | Where-Object { $_ -match 'new:' } | ForEach-Object { Write-Output $_ }
+      Write-Output "STEP 3: do the claimed work; reply/ack when done."
       return
     }
     Start-Sleep -Seconds $interval
