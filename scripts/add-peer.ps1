@@ -217,7 +217,8 @@ $setupText = Render $tplSetup $map
 $snipText  = Render $tplSnip $map
 
 # ---- target paths ----
-$wfDir   = Join-Path $root '.warp\workflows'
+$warpBase = if ($cwd) { $cwd } else { $root }   # Warp discovers .warp\workflows from the agent's cwd (its cd /d target), NOT manifest.root
+$wfDir   = Join-Path $warpBase '.warp\workflows'
 $pWf     = Join-Path $wfDir ($Owner + '.yaml')
 $pBat    = Join-Path $root $Bat
 $pSetup  = Join-Path $docsDir ('_agent_pool_setup-' + $Owner + '.md')
@@ -233,7 +234,7 @@ $plan = @(
 
 Write-Host ''
 Write-Host ('[add-peer] pool="' + $slug + '"  owner="' + $Owner + '"  after=' + $After + '  clone-wrapper-from=' + $CopyFrom) -ForegroundColor Cyan
-if ($docsDir -ne $root) { Write-Host ('[add-peer] split layout: docs (setup/CLAUDE.md/snippets) -> ' + $docsDir + '  |  wrappers + .warp -> ' + $root) -ForegroundColor DarkCyan }
+if ($docsDir -ne $root -or $warpBase -ne $root) { Write-Host ('[add-peer] split layout: docs -> ' + $docsDir + '  |  wrapper -> ' + $root + '  |  .warp (Warp cwd) -> ' + $warpBase) -ForegroundColor DarkCyan }
 if ($DryRun) { Write-Host '[add-peer] DRY RUN - nothing will be written' -ForegroundColor Yellow }
 Write-Host ''
 
