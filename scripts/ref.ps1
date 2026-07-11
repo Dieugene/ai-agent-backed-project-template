@@ -14,6 +14,7 @@ $map = [ordered]@{
     'secrets'           = (Join-Path $root 'base\secrets.md')
     'pool-coordination' = '<workspace-root>\.launcher\pool-bus\COORDINATION.md'
     'pool-lifecycle'    = (Join-Path $root 'pool\lifecycle.md')
+    'pool-grow-team'    = (Join-Path $root 'pool\grow-team.md')
     'tech-lead'         = (Join-Path $root 'roles\tech-lead.md')
     'qa'                = (Join-Path $root 'roles\qa.md')
 }

@@ -37,7 +37,7 @@
 
 param(
   [Parameter(Mandatory,Position=0)]
-  [ValidateSet('send','reply','note','inbox','mine','claim','ack','dismiss','check','watch','hook','activity','board','help')]
+  [ValidateSet('send','reply','note','inbox','mine','claim','ack','dismiss','check','watch','hook','activity','armgate','board','help')]
   [string]$Cmd,
   [string]$To, [string]$From, [string]$Owner, [string]$Subject,
   [string]$Body, [string]$BodyFile, [string]$Id, [string]$InReplyTo,
@@ -218,20 +218,47 @@ function Invoke-Check([string]$o) {
   }
 }
 
-# Background "sleeping watcher": polls check; on first fire prints re-arm + exits (harness wakes the agent).
-# Singleton heartbeat-lock prevents two watchers per owner. Re-arm is the agent's job (a watcher cannot
-# wake an idle session itself). File staying in new/ is the floor: even a lost wake is caught by the hook (pull).
+# --- watcher liveness by REAL process (not heartbeat freshness). The lock carries "<pid>|<startTicks>|<iso>":
+# a watcher is truly alive only if that PID runs AND its process StartTime matches (guards PID reuse). Used by the
+# arm path (newest-wins supersede) and the Stop-hook arm-gate. Old-format locks (pre-2026-07, ISO only) parse to
+# pid 0 -> reported not-alive -> a fresh re-arm supersedes them. Board freshness (Get-WatchState) stays unchanged.
+function Read-WatchLock([string]$o) {
+  $lock = Join-Path (Join-Path $BusRoot '.watch') ("lock-{0}.txt" -f $o)
+  if (-not (Test-Path $lock)) { return $null }
+  $raw = ''; try { $raw = ([System.IO.File]::ReadAllText($lock)).Trim() } catch { return $null }
+  $parts = $raw -split '\|'
+  $wpid = 0; [void][int]::TryParse([string]$parts[0], [ref]$wpid)
+  $ticks = [long]0; if ($parts.Count -ge 2) { [void][long]::TryParse([string]$parts[1], [ref]$ticks) }
+  [pscustomobject]@{ path = $lock; procId = $wpid; startTicks = $ticks }
+}
+function Test-ProcessAlive([int]$procId, [long]$startTicks) {
+  if ($procId -le 0) { return $false }
+  $p = $null; try { $p = Get-Process -Id $procId -ErrorAction Stop } catch { return $false }
+  if (-not $p) { return $false }
+  if ($startTicks -gt 0) { try { if ($p.StartTime.Ticks -ne $startTicks) { return $false } } catch { } }
+  return $true
+}
+function Test-WatcherAlive([string]$o) { $lk = Read-WatchLock $o; if (-not $lk) { return $false }; Test-ProcessAlive $lk.procId $lk.startTicks }
+function Write-WatchLock([string]$lock, [int]$procId, [long]$startTicks) {
+  Set-Content -Path $lock -Value ('{0}|{1}|{2}' -f $procId, $startTicks, (Get-Date).ToString('o')) -Encoding ASCII
+}
+
+# Background "sleeping watcher": polls check; on first fire prints claim/work + exits (harness wakes the agent).
+# NEWEST-WINS: on arm, if a prior watcher for this owner is truly alive, it is superseded (killed) and this one
+# takes over - no more "fresh lock -> exit" self-elision (that let an orphan block the real watcher). Re-arm is the
+# agent's job (a watcher cannot wake an idle session itself); the Stop-hook arm-gate makes that deterministic.
 function Invoke-Watch([string]$o,[int]$interval) {
   Require-Bus
   $lock  = Join-Path (Watch-Dir) ("lock-{0}.txt" -f $o)
-  $stale = [Math]::Max(120, $interval * 3)
-  if (Test-Path $lock) {
-    $age = ((Get-Date) - (Get-Item $lock).LastWriteTime).TotalSeconds
-    if ($age -lt $stale) { Write-Output ("[WATCH] {0}: another watcher active (lock age {1:N0}s) - exiting (no re-arm)" -f $o, $age); return }
+  $myStart = [long]0; try { $myStart = (Get-Process -Id $PID).StartTime.Ticks } catch { }
+  $prev = Read-WatchLock $o
+  if ($prev -and $prev.procId -ne $PID -and (Test-ProcessAlive $prev.procId $prev.startTicks)) {
+    # normal re-arm has no live prior (it fired and exited), so this only supersedes an orphan/duplicate
+    try { Stop-Process -Id $prev.procId -Force -ErrorAction Stop; Write-Output ("[WATCH] {0}: superseded prior watcher (pid {1})" -f $o, $prev.procId) } catch { }
   }
   $reArm = '  Bash(run_in_background:true): powershell -NoProfile -ExecutionPolicy Bypass -File "{0}" watch -Owner {1} -BusRoot "{2}"' -f $PSCommandPath, $o, $BusRoot
   while ($true) {
-    Set-Content -Path $lock -Value ((Get-Date).ToString('o')) -Encoding ASCII   # heartbeat
+    Write-WatchLock $lock $PID $myStart   # heartbeat: pid + StartTime ticks (liveness) + timestamp (board freshness)
     $det = Invoke-Check $o
     if (($det -join "`n") -match '\[WAKE\]') {
       if (Test-Path $lock) { Remove-Item $lock -Force -ErrorAction SilentlyContinue }
@@ -246,6 +273,10 @@ function Invoke-Watch([string]$o,[int]$interval) {
       Write-Output "STEP 2 (still BEFORE you start working): re-arm the watcher:"
       Write-Output $reArm
       Write-Output "STEP 3: do the claimed work; reply/ack when done."
+      # --- TEMP migration notice: REMOVE once pools have cycled. Added 2026-07-05; target removal ~2026-07-19. Tracked in Launcher handoff. ---
+      Write-Output "  --"
+      Write-Output "  NOTE (temporary, 2026-07 migration): the wake order is now claim -> re-arm -> work (it used to be 're-arm FIRST'). If your _handoff or _agent_pool_setup still tells you to re-arm first, or calls the watcher 'one-shot / won't re-fire on a still-pending task', update that one line to match this order. You need not touch any script - Launcher will remove this notice later."
+      # --- end TEMP migration notice ---
       return
     }
     Start-Sleep -Seconds $interval
@@ -297,6 +328,39 @@ function Invoke-Activity {
       default { }
     }
   } catch { }
+}
+
+# Stop-hook ARM-GATE (global hook, self-gated by env POOL_WATCHER=1 -> only watcher roles; else instant no-op).
+# On the MAIN session's Stop, if no watcher is truly alive, emit decision:block with a re-arm instruction ->
+# the harness holds the turn and the agent arms (in the MAIN context -> a wake-capable, harness-tracked watcher).
+# Wired ONLY to `Stop` (never SubagentStop) -> a subagent never arms -> the orphan-birth path is closed.
+# Backoff marker (.watch/armgate-<owner>.txt): if we blocked <30s ago and a watcher STILL is not up, arming is
+# failing (antivirus/binary) -> do NOT block again (warn instead) so a broken spawn can never wedge the session.
+function Invoke-ArmGate {
+  if ($env:POOL_WATCHER -ne '1') { return }                                             # opt-in: only watcher roles
+  if ([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($BusRoot)) { return }
+  $payload = if ($Body) { $Body } elseif ([Console]::IsInputRedirected) { [Console]::In.ReadToEnd() } else { '' }
+  $evt = ''
+  if ($payload) { try { $evt = "$(($payload | ConvertFrom-Json).hook_event_name)" } catch { } }
+  if ($evt -and $evt -ne 'Stop') { return }                                             # SubagentStop / other -> ignore
+  $mark = Join-Path (Watch-Dir) ("armgate-{0}.txt" -f $Owner)
+  if (Test-WatcherAlive $Owner) {
+    if (Test-Path $mark) { Remove-Item $mark -Force -ErrorAction SilentlyContinue }      # armed -> clear backoff
+    return
+  }
+  if (Test-Path $mark) {
+    $age = ((Get-Date) - (Get-Item $mark).LastWriteTime).TotalSeconds
+    if ($age -lt 30) {
+      # arming isn't taking (spawn failing?) -> do NOT block again -> never wedge the session. Warn on stderr, exit 0 (allow).
+      [Console]::Error.WriteLine("[POOL WATCHER] arm was requested last turn but no live watcher is detected for '$Owner'. Not blocking again. Background spawn may be failing (antivirus / binary); arm manually if this repeats: powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" watch -Owner $Owner -BusRoot `"$BusRoot`"")
+      return
+    }
+  }
+  Set-Content -Path $mark -Value ((Get-Date).ToString('o')) -Encoding ASCII
+  # Block the stop via EXIT CODE 2: the harness restarts the turn and feeds this stderr text to the agent, which then
+  # arms the watcher. (exit-2 + stderr reaches the model; a stdout `reason` on a Stop hook would show only to the user.)
+  [Console]::Error.WriteLine("No live pool watcher for '$Owner'. Before you stop, arm it as a background task now: run a Bash tool call with run_in_background=true executing:  powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" watch -Owner $Owner -BusRoot `"$BusRoot`"  -- this wakes you on incoming pool tasks while you idle. Launch it, then you may stop.")
+  exit 2
 }
 
 # Tiny ANSI painter: wraps text in an SGR color for a live terminal; plain when output is redirected
@@ -502,6 +566,7 @@ switch ($Cmd) {
   'watch' { Invoke-Watch $Owner $IntervalSeconds }
   'hook'  { Invoke-Hook }
   'activity' { Invoke-Activity }
+  'armgate' { Invoke-ArmGate }
   'board' {
     # idle-notify: explicit -Notify, or globally via a sentinel file .board-notify in this dir
     $doNotify = [bool]$Notify -or (Test-Path (Join-Path $PSScriptRoot '.board-notify'))

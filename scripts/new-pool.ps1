@@ -279,6 +279,9 @@ if ($InitialPromptFile -and (Test-Path $InitialPromptFile)) {
     try { $initPrompt = [System.IO.File]::ReadAllText($InitialPromptFile, [System.Text.Encoding]::UTF8).Trim() } catch { $initPrompt = '' }
 }
 
+# Stop-hook watcher arm-gate opt-in: watcher roles pass -InitialPromptFile; watcherless (devops/serverside) do not.
+if ($InitialPromptFile) { $env:POOL_WATCHER = '1' }
+
 $effortArgs = if ($Effort) { @('--effort', $Effort) } else { @() }
 
 $sessionId = Find-SessionIdByTitle -Title $SessionTitle -Dir $projectDir

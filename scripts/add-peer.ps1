@@ -16,7 +16,7 @@
                              -After); with no explicit layout the picker auto-derives.
     - _agent_pool_setup-<owner>.md : skeleton from template (boilerplate filled,
                              domain content as <!-- TODO -->).
-    - CLAUDE.md (pool root): deterministic wiring - owner into the Step-1 mode-detection
+    - CLAUDE.md (manifest dir): deterministic wiring - owner into the Step-1 mode-detection
                              set (CRITICAL: without it the session falls to Plain mode),
                              role-count bump, and a role-table row after -After. Anchored
                              on the canonical new-pool shape; on a divergent doc it does
@@ -131,6 +131,10 @@ if (-not (Test-Path $Manifest)) { Die ("manifest not found: " + $Manifest) }
 $rawMf = ReadText $Manifest
 try { $m = $rawMf | ConvertFrom-Json } catch { Die ("manifest is not valid JSON: " + $_.Exception.Message) }
 $root = $m.root
+# Doc artifacts (setup / CLAUDE.md / snippets) live WITH the manifest; wrappers + .warp live in $root.
+# Standalone pools: these coincide. Split-layout pools (manifest+docs in a project subdir, wrappers in a shared
+# scripts\ dir that is manifest.root) differ -> derive docsDir from the manifest path.
+$docsDir = Split-Path -Parent (Resolve-Path -LiteralPath $Manifest).Path
 $slug = $m.slug
 $lead = $m.lead
 $ownersNow = @($m.roles | ForEach-Object { $_.owner })
@@ -205,7 +209,7 @@ $tplSetup = ReadText (Join-Path $TemplatesDir 'setup.md.template')
 $tplSnip  = ReadText (Join-Path $TemplatesDir 'snippets.md.template')
 $map = @{
   OWNER=$Owner; TITLE=$Title; DISPLAY=$Display; MISSION=$Mission; ZONE=$Zone;
-  POOL=$pool; SLUG=$slug; ROOT=$root; BAT=$Bat; CWD=$cwd; BUSROOT=$busroot;
+  POOL=$pool; SLUG=$slug; ROOT=$root; DOCSDIR=$docsDir; BAT=$Bat; CWD=$cwd; BUSROOT=$busroot;
   DATE=(Get-Date).ToString('yyyy-MM-dd')
 }
 $wfText    = Render $tplWf $map
@@ -216,8 +220,8 @@ $snipText  = Render $tplSnip $map
 $wfDir   = Join-Path $root '.warp\workflows'
 $pWf     = Join-Path $wfDir ($Owner + '.yaml')
 $pBat    = Join-Path $root $Bat
-$pSetup  = Join-Path $root ('_agent_pool_setup-' + $Owner + '.md')
-$pSnip   = Join-Path $root ('_add-peer-' + $Owner + '.snippets.md')
+$pSetup  = Join-Path $docsDir ('_agent_pool_setup-' + $Owner + '.md')
+$pSnip   = Join-Path $docsDir ('_add-peer-' + $Owner + '.snippets.md')
 
 $plan = @(
   @{ path=$pBat;      kind='bat';  text=$batText },
@@ -229,6 +233,7 @@ $plan = @(
 
 Write-Host ''
 Write-Host ('[add-peer] pool="' + $slug + '"  owner="' + $Owner + '"  after=' + $After + '  clone-wrapper-from=' + $CopyFrom) -ForegroundColor Cyan
+if ($docsDir -ne $root) { Write-Host ('[add-peer] split layout: docs (setup/CLAUDE.md/snippets) -> ' + $docsDir + '  |  wrappers + .warp -> ' + $root) -ForegroundColor DarkCyan }
 if ($DryRun) { Write-Host '[add-peer] DRY RUN - nothing will be written' -ForegroundColor Yellow }
 Write-Host ''
 
@@ -248,7 +253,7 @@ foreach ($a in $plan) {
 }
 
 Write-Host ''
-$pClaude   = Join-Path $root 'CLAUDE.md'
+$pClaude   = Join-Path $docsDir 'CLAUDE.md'
 $claudeRes = $null
 if (-not $DryRun) { $claudeRes = Wire-ClaudeMd $pClaude $After $Owner $Display $Title $Mission $Bat $ownersNow.Count ($ownersNow.Count + 1) }
 

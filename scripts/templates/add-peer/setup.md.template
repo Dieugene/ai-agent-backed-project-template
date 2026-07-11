@@ -12,7 +12,7 @@ Onboarding в pool `{{POOL}}` как **{{TITLE}}**. {{MISSION}}
 | TASK_LIST_ID | `{{POOL}}` |
 | Display name | `{{DISPLAY}}` |
 | Cwd | `{{CWD}}` |
-| Проектная папка | `{{ROOT}}` |
+| Проектная папка | `{{DOCSDIR}}` |
 | Основной код / зона | `{{ZONE}}` |
 | Mailbox / шина | `{{BUSROOT}}` (адрес = папка `{{OWNER}}\new\`) |
 | Launcher | `{{BAT}}` |
