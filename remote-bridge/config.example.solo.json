@@ -1,0 +1,8 @@
+{
+  "mode": "solo",
+  "allowed_user_id": 0,
+  "allowed_chats": [],
+  "default_target": "launcher",
+  "data_dir": "<workspace-root>\\.launcher\\03_data",
+  "stt": {"provider": "none"}
+}

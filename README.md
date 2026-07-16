@@ -47,6 +47,11 @@ rm-guard `block-dangerous-rm.ps1`, доска/нотификатор, шабло
 **`commands/`** — переиспользуемые **slash-команды** Claude Code (готовые промпт-шаблоны,
 кладутся в `~/.claude/commands/`), напр. `handoff-myself.md`. См. [`commands/README.md`](commands/README.md).
 
+**`remote-bridge/`** — **удалённый пульт к своей Claude-сессии через Telegram** (управляй живой
+сессией/пулом с телефона): рабочий движок (long-polling бот + сторож-побудка + исходящий канал сессии) +
+инструкция «подключи своего бота». Секретов нет — токен/`user_id` живут в `secrets/` вне репозитория.
+См. [`remote-bridge/README.md`](remote-bridge/README.md).
+
 ## Анонимизация
 
 Все идентификаторы — placeholder'ы: `<workspace-root>`, `<user-home>`, `<pool-name>`,

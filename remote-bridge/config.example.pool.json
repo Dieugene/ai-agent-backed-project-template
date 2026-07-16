@@ -1,0 +1,8 @@
+{
+  "mode": "pool",
+  "allowed_user_id": 0,
+  "allowed_chats": [],
+  "default_target": null,
+  "stt": {"provider": "none"},
+  "wake_debounce_s": 60
+}
