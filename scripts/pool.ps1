@@ -321,7 +321,15 @@ function Invoke-Activity {
     if (-not $o) { return }
     $adir = Join-Path (Join-Path $BusRoot '.activity') $Owner
     switch ("$($o.hook_event_name)") {
-      'UserPromptSubmit' { Write-ActivityState $adir 'busy'; Clear-StaleSubMarkers $adir }
+      'UserPromptSubmit' {
+        Write-ActivityState $adir 'busy'; Clear-StaleSubMarkers $adir
+        # Shutdown controller: a NEW turn = the agent is working again -> any stale readiness flag is
+        # invalidated. Source-agnostic (watcher / peer / direct input): any turn clears shutdown-ready
+        # so a stale flag can't authorize a -KillOnly shutdown of a session whose handoff has gone stale.
+        # Cleared ONLY here (not on Stop: the flag is set at the end of the handoff turn, and Stop would
+        # wipe it immediately).
+        try { $rf = Join-Path $env:USERPROFILE (".claude\.control\shutdown-ready-{0}" -f $Owner); if (Test-Path $rf) { Remove-Item $rf -Force -ErrorAction SilentlyContinue } } catch { }
+      }
       'Stop'             { Write-ActivityState $adir 'idle' }
       'SubagentStart'    { if ($o.agent_id) { [void](Ensure-Dir $adir); [System.IO.File]::WriteAllText((Join-Path $adir ("sub-{0}" -f $o.agent_id)), '', $script:U8) } }
       'SubagentStop'     { if ($o.agent_id) { Remove-Item (Join-Path $adir ("sub-{0}" -f $o.agent_id)) -Force -ErrorAction SilentlyContinue } }

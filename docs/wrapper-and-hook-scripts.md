@@ -124,6 +124,17 @@ per-pool rollout не нужен. `Owner` и `BusRoot` берутся из env
 watcher. Note (`note`) — FYI: отдельная секция, на борде нет, гасится одним
 `dismiss`; будит watcher только с флагом `-Wake`.
 
+**Хук `activity` попутно чистит ready-флаг завершения.** На `UserPromptSubmit`
+(новый ход) `activity` не только помечает owner'а `busy` для борда, но и
+**удаляет** флаг готовности к завершению
+`<user-home>\.claude\.control\shutdown-ready-<owner>`, если тот есть.
+Source-agnostic: неважно, чем разбудили сессию (watcher / peer / прямой ввод) —
+**любой** новый ход инвалидирует устаревшую метку, чтобы протухший «готов» не
+авторизовал гашение сессии, чей handoff уже неактуален. Флаг ставит агент в
+конце handoff-хода, а стирается он **только** здесь (не на `Stop` — тот снёс бы
+его сразу). Механику завершения, читающую этот флаг, — [Pool Shutdown & Context
+Refresh](pool-shutdown-and-context-refresh.md).
+
 ---
 
 ## 2. Wrapper-батник на агента
@@ -436,5 +447,7 @@ stdout. pool-CLI сам держит UTF-8 на выводе и чтении ш�
   кладутся в общей структуре.
 - [Intra-Project Pool Recipe](intra-project-pool-recipe.md) — пошаговый
   bootstrap, который использует эти скрипты.
+- [Pool Shutdown & Context Refresh](pool-shutdown-and-context-refresh.md) —
+  контроллер, ради которого хук `activity` чистит `shutdown-ready`-флаг (§1.5).
 - [Lessons Learned §3](lessons-learned.md) — антипаттерны разработки
   pool-инфры.

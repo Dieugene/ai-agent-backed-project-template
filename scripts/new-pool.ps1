@@ -144,11 +144,11 @@ $T_settings = @'
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"D:\\_workspace\\.launcher\\pool-bus\\pool.ps1\" hook"
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" hook"
           },
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"D:\\_workspace\\.launcher\\pool-bus\\pool.ps1\" activity"
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" activity"
           }
         ]
       }
@@ -158,7 +158,7 @@ $T_settings = @'
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"D:\\_workspace\\.launcher\\pool-bus\\pool.ps1\" activity"
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" activity"
           }
         ]
       }
@@ -168,7 +168,7 @@ $T_settings = @'
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"D:\\_workspace\\.launcher\\pool-bus\\pool.ps1\" activity"
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" activity"
           }
         ]
       }
@@ -178,7 +178,7 @@ $T_settings = @'
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"D:\\_workspace\\.launcher\\pool-bus\\pool.ps1\" activity"
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" activity"
           }
         ]
       }
@@ -201,7 +201,7 @@ $T_mcp = @'
       "command": "npx",
       "args": [
         "chrome-devtools-mcp@latest",
-        "--user-data-dir=D:\\_workspace\\.chrome-profiles\\${AGENT_OWNER:-_plain}"
+        "--user-data-dir=<workspace-root>\\.chrome-profiles\\${AGENT_OWNER:-_plain}"
       ],
       "env": {}
     }

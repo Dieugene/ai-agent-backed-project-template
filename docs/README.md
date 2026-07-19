@@ -5,8 +5,7 @@
 управлением человека-владельца. Цель — воспроизвести такое пространство **с нуля на новой машине**.
 
 Ветка описывает **multi-peer параллельную модель** и всё вокруг неё: среду, скилы, координацию
-(файловая **maildir pool-шина**, общая команда `pool`), запуск/мониторинг, роли, DevOps, стиль.
-Ортогонально single-developer веткам шаблона (`iterative`, `specified`).
+(файловая **maildir pool-шина**, общая команда `pool`), запуск/мониторинг, завершение, роли, DevOps, стиль.
 
 ## Предварительные требования (новая машина)
 
@@ -27,7 +26,7 @@
 |----------|-------|
 | [Windows / PowerShell Pitfalls](windows-powershell-pitfalls.md) | Кириллица в `.ps1` → UTF-8 с BOM; байт-безопасные правки; Kaspersky/AV душит `uv_spawn` (EPERM); поисковый инструмент пропускает файлы → `Select-String`. |
 | [Handling Secrets](handling-secrets.md) | Не печатать/бейкать `.env`; шифрованный перенос + `chmod 600`; плейсхолдеры в публичном репо; команды, тихо раскрывающие секреты. |
-| [Safety Guards](safety-guards.md) | Глобальный PreToolUse-hook против катастрофического рекурсивного `rm`; работает под `--dangerously-skip-permissions`; регистрация и self-test. |
+| [Safety Guards](safety-guards.md) | Глобальные hook'и надёжности: жёсткий блок катастрофического `rm` (PreToolUse, работает под `--dangerously-skip-permissions`), advisory на kill-по-имени (чтобы не бить чужие вотчеры), детектор malformed-вывода (Stop). Регистрация и self-test. |
 | [Claude Code Setup](claude-code-setup.md) | Effort-уровни и персистентность; статус-лайн; постоянные именованные сессии (compaction); файловая система памяти; изоляция браузера по агентам. |
 | [The Skills System](the-skills-system.md) | Механика скилов; listing budget (1%); тонкие стабы + вынос канона в `.references/` + инжектор `ref.ps1`; каскад дискаверинга и перенос cwd; meta-skill (Iron Law). |
 
@@ -41,12 +40,17 @@
 |----------|-------|
 | [Pool Communication](pool-communication.md) | Координационный стандарт: env vars, maildir-шина (сообщение=immutable-файл, адрес=папка), pool-CLI, hook, вотчер, топология, per-owner handoff. Инвариант доставки держит инструмент, а не дисциплина. |
 | [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md) | Ядро `pool.ps1` (14 подкоманд); wrapper на роль; hook/вотчер как режимы CLI; дворник личных todo. Legacy-скрипты помечены DEPRECATED. |
-| [Pool Launcher & Warp](pool-launcher-and-warp.md) | Терминальный fzf-пикер пулов (`pool.manifest.json`, `control.json`, авто-раскладка) → разовый Warp tab-config; Warp Workflows. |
+| [Pool Launcher & Warp](pool-launcher-and-warp.md) | Терминальный fzf-пикер-**пульт**: выбор пула → действия [Запустить] / [Завершить] / [Борд] → разовый Warp tab-config (`pool.manifest.json`, `control.json`, авто-раскладка); Warp Workflows. |
 | [Board and Watcher](board-and-watcher.md) | Вотчер (`pool watch`, push поверх pull); доска с колонками живости вотчера и активности агента; хук `pool activity`; нотификатор idle. |
-| [Pool Scaffolding](pool-scaffolding.md) | `new-pool.ps1` — новый bus-native пул одной командой; `add-peer.ps1` — добавить роль в живой пул. |
+| [Pool Scaffolding](pool-scaffolding.md) | `new-pool.ps1` — новый bus-native пул одной командой; `add-peer.ps1` — добавить роль в живой пул; `fresh-session.ps1` — свежая сессия существующему owner (сброс залипшего транскрипта). |
 | [Pool Standard Tiers](pool-standard-tiers.md) | Расслоение координационного стандарта на L1 (операционный `COORDINATION.md`) и L2 (детали); naming-convention. |
 | [Intra-Project Pool Recipe](intra-project-pool-recipe.md) | Пошаговый bootstrap intra-project pool (N peer-агентов в одном подпроекте): скаффолдер, зоны, smoke-тест, расширение. |
 | [Lessons Learned](lessons-learned.md) | Антипаттерны и пределы с реальной практики; обобщающий урок — корректность координации перенесена из памяти-агента в инструмент. |
+
+### Завершение и контекст-гигиена
+| Документ | О чём |
+|----------|-------|
+| [Pool Shutdown & Context Refresh](pool-shutdown-and-context-refresh.md) | Внешний контроллер аккуратного завершения (handoff → compact → kill; лёгкое закрытие для почти пустых сессий), метрика контекста на сессию, пульт как единая точка управления. Курс — на агентов, что сами себя чистят и освежают. |
 
 ### Роли
 | Документ | О чём |
@@ -104,6 +108,4 @@
 - Секреты, конфиги, IP-адреса, имена production-серверов — всё обезличено.
 - Детальные DevOps-runbooks (safe-deploy, provisioning, детали sre-контура) — зона DevOps-оркестратора,
   сюда включена только модель разделения и координация.
-- Превентивные шаблоны проекта — для single-developer workflow смотрите ветки
-  [iterative](https://github.com/Dieugene/ai-agent-backed-project-template/tree/iterative)
-  или [specified](https://github.com/Dieugene/ai-agent-backed-project-template/tree/specified).
+- Превентивные шаблоны проекта для single-developer workflow — вне scope этой (multi-peer) базы знаний.

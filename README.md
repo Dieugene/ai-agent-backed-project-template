@@ -20,10 +20,10 @@ The pieces stack in a dependency spine — read top to bottom and each layer res
 
 ## What's inside
 
-The knowledge base is organized into **8 standards blocks (A–H)**. Each links to its key docs.
+The knowledge base is organized into **9 standards blocks (A–I)**. Each links to its key docs.
 
 ### A — Foundation: Environment & Safety
-The bedrock every session sits on: Windows/PowerShell gotchas, secret hygiene, a global guard against catastrophic `rm`, and Claude Code environment setup.
+The bedrock every session sits on: Windows/PowerShell gotchas, secret hygiene, global reliability guards (a hard block on catastrophic `rm`, a process-kill advisory, a malformed-output detector), and Claude Code environment setup.
 → [Windows / PowerShell Pitfalls](docs/windows-powershell-pitfalls.md) · [Handling Secrets](docs/handling-secrets.md) · [Safety Guards](docs/safety-guards.md) · [Claude Code Setup](docs/claude-code-setup.md)
 
 ### B — Skills System
@@ -54,12 +54,16 @@ A two-layer DevOps model (server-wide orchestrator + per-monorepo DevOps) and a 
 Drive a live session or pool **from your phone via Telegram** — text or voice, behind NAT, no open ports. One engine copy per workspace; instances are wired by config. The only outbound channel is allowlisted; only the owner can write.
 → [remote-bridge/](remote-bridge/)
 
+### I — Shutdown & Context Hygiene
+The other half of the lifecycle after *launch & observe* (E): winding a pool down cleanly and keeping context fresh. An external controller runs **handoff → compact → kill** (a *light close* skips both for a near-empty session), reads a per-session context metric, and the picker doubles as the **pult** — one control surface to launch, shut down, or open the board. The direction of travel: agents that self-clean instead of a human babysitting `/compact`.
+→ [Pool Shutdown & Context Refresh](docs/pool-shutdown-and-context-refresh.md)
+
 ### Top-level directories
 
 | Directory | What it holds |
 |-----------|---------------|
-| [`docs/`](docs/) | The knowledge base — the 8 blocks above. Start at [`docs/README.md`](docs/README.md). |
-| [`scripts/`](scripts/) | Anonymized reference PowerShell: the bus core `pool.ps1`, scaffolders `new-pool.ps1` / `add-peer.ps1`, launcher `launch-pool.ps1`, canon-injector `ref.ps1`, guard `block-dangerous-rm.ps1`, board/notifier, and templates. |
+| [`docs/`](docs/) | The knowledge base — the 9 blocks above. Start at [`docs/README.md`](docs/README.md). |
+| [`scripts/`](scripts/) | Anonymized reference PowerShell: the bus core `pool.ps1`, scaffolders `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, launcher/pult `launch-pool.ps1`, shutdown controller `pool-shutdown.ps1`, guards `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, canon-injector `ref.ps1`, board/notifier, and templates. |
 | [`commands/`](commands/) | Reusable Claude Code slash-commands (prompt templates for `~/.claude/commands/`), e.g. [`handoff-myself`](commands/handoff-myself.md). |
 | [`remote-bridge/`](remote-bridge/) | The Telegram "pult" — a working long-polling bridge engine plus a "connect your own bot" guide. Secrets live outside the repo. |
 

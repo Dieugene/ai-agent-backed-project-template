@@ -7,7 +7,20 @@
 под `--dangerously-skip-permissions`, или настраиваешь хуки Claude Code.
 
 > Плейсхолдеры: `<user-home>` / `$env:USERPROFILE` — домашняя папка; `<VAR>` —
-> любая shell-переменная.
+> любая shell-переменная; `<owner>` — id роли pool-агента.
+
+Гардов в этом семействе **три**, все — глобальные хуки Claude Code: живут в
+`<user-home>\.claude\hooks\` и регистрируются в `<user-home>\.claude\settings.json`
+(§4), поэтому подхватываются каждой сессией машины.
+
+| Гард | Событие | Тип | Что ловит |
+|------|---------|-----|-----------|
+| **rm-guard** (§1–§5) | `PreToolUse` (`Bash\|PowerShell`) | **жёсткий блок** | катастрофическое рекурсивное удаление (пустая переменная / корень) |
+| **process-kill advisory** (§6) | `PreToolUse` (`Bash\|PowerShell`) | **advisory, не блок** | kill-по-имени (может снести вотчеры чужих pool-агентов); нуджит бить по PID |
+| **malformed detector** (§7) | `Stop` | **детект + уведомление** | утёкший в текст tool-call (format drift модели); уведомляет и логирует |
+
+Первый — рабочая лошадка (детальный разбор ниже); §6–§7 — два более лёгких
+гарда того же семейства (совет и детектор, не блок).
 
 ---
 
@@ -75,10 +88,12 @@
 
 ## 4. Регистрация и self-test
 
-**Установка.** Скрипт кладут в `<user-home>\.claude\hooks\` и регистрируют
-**глобально** в `<user-home>\.claude\settings.json` (не в проектном
-`settings.local.json`) — так его подхватывают все сессии на машине: пул-агенты,
-Launcher, DevOps.
+**Установка.** Все три скрипта кладут в `<user-home>\.claude\hooks\` и
+регистрируют **глобально** в `<user-home>\.claude\settings.json` (не в проектном
+`settings.local.json`) — так их подхватывают все сессии на машине: пул-агенты,
+Launcher, DevOps. Полный блок — сразу все три хука: **два `PreToolUse`** (rm-guard
++ process-kill advisory) в одном matcher-блоке `Bash|PowerShell` и **один `Stop`**
+(malformed detector):
 
 ```json
 {
@@ -87,10 +102,18 @@ Launcher, DevOps.
       {
         "matcher": "Bash|PowerShell",
         "hooks": [
-          {
-            "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<user-home>\\.claude\\hooks\\block-dangerous-rm.ps1\""
-          }
+          { "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<user-home>\\.claude\\hooks\\block-dangerous-rm.ps1\"" },
+          { "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<user-home>\\.claude\\hooks\\warn-process-kill.ps1\"" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<user-home>\\.claude\\hooks\\stop-detect-malformed.ps1\"" }
         ]
       }
     ]
@@ -98,9 +121,11 @@ Launcher, DevOps.
 }
 ```
 
-Matcher `Bash|PowerShell` — обе оболочки, которыми агент может звать удаление.
-Новые сессии подхватывают хук сразу; текущая — после перезагрузки хуков
-(`/hooks`) или рестарта.
+Matcher `Bash|PowerShell` — обе оболочки, которыми агент может звать удаление
+или kill; оба `PreToolUse`-хука делят один matcher-блок (порядок в массиве не
+важен — rm-guard блокирует, advisory только советует). `Stop`-хук matcher'а не
+несёт (событие без tool-инструмента). Новые сессии подхватывают хуки сразу;
+текущая — после перезагрузки хуков (`/hooks`) или рестарта.
 
 **Self-test.** У скрипта есть режим `-SelfTest`, прогоняющий набор тест-кейсов
 (и опасные-должны-DENY, и безопасные-должны-ALLOW) против матчера:
@@ -145,9 +170,93 @@ self-test заново.
 
 ---
 
+## 6. Process-kill advisory (глобальный `PreToolUse`, НЕ блок)
+
+Второй гард семейства — **не блок, а совет**. Тот же `PreToolUse` с матчером
+`Bash|PowerShell`, но вердикт всегда `allow`: команду он **не запрещает**, а
+**впрыскивает нудж** в контекст модели (`additionalContext`), когда та собирается
+убивать процессы **по атрибуту / запросу**, а не по PID.
+
+**Что помечает** (широкий kill — сносит ВСЕ совпавшие процессы на машине):
+
+| Форма (фрагменты) | Почему опасно |
+|-------------------|---------------|
+| `... \| Stop-Process`; `Get-CimInstance`/`Get-Process ... \| Stop-Process`/`kill` | сносит всё, что налил в пайп фильтр |
+| `Stop-Process -Name <x>` | по имени → все инстансы |
+| `taskkill /IM <x>` (и `/FI`, `/T`) | по имени-образу → все инстансы |
+| `.Terminate()`, `Invoke-CimMethod ... Terminate` | WMI-массовое завершение |
+
+**Что НЕ помечает — формы по PID** (безопасные, пропущены намеренно):
+`Stop-Process -Id <n>`, `taskkill /PID <n>`.
+
+**Зачем.** В workspace параллельно крутится много pool-сессий и их фоновый
+хвост (вотчеры, sentinel'ы). Kill по имени (`powershell.exe`, `node`) прибьёт
+**вотчеры чужих агентов** и целые чужие сессии, не только свою. Нудж советует:
+для одного чистого вотчера **не убивать ничего** — просто перевзвести
+`pool watch` (перевзвод супершедит только СВОЙ вотчер, по PID); а если убивать
+надо — целить **конкретный PID** (`Stop-Process -Id`), не `-Name`/`CommandLine`.
+(И: пропавший процесс — обычно kill соседа по пулу, а не антивирус.)
+
+**Почему advisory, а не блок.** Матчер намеренно **грубый**: раз гард только
+советует (никогда не `deny`), ложные срабатывания безвредны — незачем точить
+regex. Гард **stateless** (ни маркеров, ни пер-сессионного учёта), ASCII-only
+(вне BOM-ловушки), есть `-SelfTest` для проверки матчера.
+
+Код — [`../scripts/warn-process-kill.ps1`](../scripts/warn-process-kill.ps1).
+
+---
+
+## 7. Детектор malformed tool-call (глобальный `Stop`, детект + уведомление)
+
+Третий гард — **не про удаление, а про format drift самой модели**. Иногда
+модель эмитит tool-call **как обычный текст**; харнесс не может его распарсить и
+оставляет в транскрипте маркер «malformed and could not be parsed» (утёкший
+`<invoke>` вместо настоящего tool_use). Гард ловит этот маркер на `Stop`,
+**уведомляет и логирует** — но **не лечит** (только детект + нотификация,
+авто-фикса нет).
+
+**Как работает:**
+
+- **`Stop`-хук**, всегда `exit 0` — стоп никогда не держит. **Гейт: только
+  pool-сессии** (`POOL_BUS_ROOT` + `AGENT_OWNER` выставлены); plain-сессии
+  Launcher/DevOps исключены.
+- `Stop` срабатывает на **каждом** конце хода → **дедуп по офсету**: пер-owner
+  файл `<POOL_BUS_ROOT>\.watch\malformed-<owner>.txt` хранит длину транскрипта
+  (в байтах) на момент прошлой проверки; маркеры считаются только в **новой**
+  области с тех пор. **Первый взгляд молчит** (записывает длину, по историческим
+  маркерам не шумит) → гард forward-looking.
+- **Классификация recovered vs stuck.** После ПОСЛЕДНЕГО маркера смотрит хвост:
+  появился валидный `"type":"tool_use"` или чистый `"stop_reason":"end_turn"` —
+  модель **сама выправилась** (recovered, информационно); нет — **застряла**
+  (stuck, нужно действие). Тост-companion
+  [`../scripts/notify-malformed.ps1`](../scripts/notify-malformed.ps1) адаптирует
+  текст под эти два случая.
+- **Лог** — строка JSON в `<user-home>\.claude\malformed-log.jsonl` (ts, owner,
+  pool, session, count, recovered, snippet утёкшего блока), сериализуется между
+  сессиями через named-mutex.
+
+**Лечение — не здесь.** Гард только сигналит. Средство от застрявшего /
+format-drift'нувшего транскрипта — **пересадка в свежую сессию** (новый
+`SessionTitle` → чистый транскрипт, тот же owner / mailbox) через
+`fresh-session.ps1`: см. [Pool Scaffolding §4](pool-scaffolding.md). `/compact`
+тут ненадёжен — если «яд» дошёл до handoff, нужна пересадка + скраб handoff.
+
+Код — [`../scripts/stop-detect-malformed.ps1`](../scripts/stop-detect-malformed.ps1)
+(+ тост [`../scripts/notify-malformed.ps1`](../scripts/notify-malformed.ps1)),
+ASCII-only, есть `-SelfTest` (синтетические кейсы детекции; реальный тост не шлёт).
+
+---
+
 ## Связанные документы
 
-- [Windows / PowerShell Pitfalls](windows-powershell-pitfalls.md) — почему хук
+- [Windows / PowerShell Pitfalls](windows-powershell-pitfalls.md) — почему хуки
   ASCII-only и как правильно править `.ps1`.
+- [Pool Scaffolding §4](pool-scaffolding.md) — `fresh-session.ps1`, пересадка в
+  свежую сессию — лечение format-drift'а, который ловит детектор (§7).
 - [`../scripts/block-dangerous-rm.ps1`](../scripts/block-dangerous-rm.ps1) —
-  рабочий код барьера (матчер, self-test, hook-режим).
+  рабочий код rm-барьера (матчер, self-test, hook-режим).
+- [`../scripts/warn-process-kill.ps1`](../scripts/warn-process-kill.ps1) —
+  process-kill advisory (§6).
+- [`../scripts/stop-detect-malformed.ps1`](../scripts/stop-detect-malformed.ps1)
+  + [`../scripts/notify-malformed.ps1`](../scripts/notify-malformed.ps1) —
+  malformed-детектор и его тост (§7).

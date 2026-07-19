@@ -8,7 +8,8 @@
 > Аудитория — инженер, поднимающий такое пространство с нуля на Windows.
 > Всё — про глобальные/пользовательские настройки Claude Code, не про код
 > проекта. Пути и имена обезличены плейсхолдерами (`<workspace-root>`,
-> `<user>`, `<ProjectKey>`, `<role>`, `<SessionName>`, `<pool-name>`).
+> `<user>`, `<user-home>`, `<ProjectKey>`, `<role>`, `<SessionName>`,
+> `<pool-name>`, `<session-id>`).
 > Родственные документы: [Wrapper and Hook Scripts](wrapper-and-hook-scripts.md)
 > (рабочие примеры wrapper'ов), [Pool Communication](pool-communication.md)
 > (координация сессий), [Workspace Organization](workspace-organization.md)
@@ -119,6 +120,23 @@ Executors (обычные peer'ы) зовут тот же helper **без** `-Ef
 
 Состав сегментов меняется правкой самого скрипта; строка перечитывается
 на старте сессии (применяется в новой/перезапущенной).
+
+### Побочный выход: per-session ctx-метрика
+
+Тот же скрипт статус-лайна попутно **tee'ит** свой stdin-JSON в файл-на-сессию:
+
+```
+<user-home>\.claude\.control\ctx-<session-id>.json
+```
+
+Поля: `session_id`, `session_name`, `cwd`, `agent_owner` (из env сессии),
+`context_window.used_percentage`, `stamped_at` (UTC-метка записи). Это **метрика
+заполнения контекста**, которую **контроллер завершения пула** читает **без
+участия самих агентов** — чтобы решить, что делать с каждой сессией (handoff +
+compact у нагруженной vs просто закрыть почти пустую). Работает best-effort —
+статус-лайн не ломает, при сбое просто нет свежего файла. Живёт **глобально**,
+для всех сессий workspace. Подробно — [Pool Shutdown & Context
+Refresh](pool-shutdown-and-context-refresh.md).
 
 ---
 
@@ -294,5 +312,7 @@ type: reference    # user | feedback | project | reference
   env-переменные).
 - [Pool Communication](pool-communication.md) — координация постоянных
   сессий через pool-шину.
+- [Pool Shutdown & Context Refresh](pool-shutdown-and-context-refresh.md) —
+  контроллер завершения, читающий ctx-метрику из tee статус-лайна (§2).
 - [Workspace Organization](workspace-organization.md) — общая структура
   workspace, куда всё это ставится.

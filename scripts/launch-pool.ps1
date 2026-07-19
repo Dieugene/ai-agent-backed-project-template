@@ -221,48 +221,91 @@ try {
     if (-not $poolSel) { break }                    # Esc на пуле -> выход из пикера
     $pool = $map[[string]$poolSel]
 
-    while ($true) {                                 # уровень РЕЖИМА (тот же пул)
-      $modeItems = @(
-        ('[Полный]  — все роли ({0})' -f $pool.roles.Count),
-        ('[Ведущий] — только {0}' -f $pool.lead),
-        '[Выбрать вручную]'
+    while ($true) {                                 # уровень ДЕЙСТВИЯ (пульт: запустить / завершить / борд)
+      $actItems = @(
+        '[Запустить] — поднять сессии пула',
+        '[Завершить] — handoff -> гашение -> compact (в отдельном окне)',
+        '[Борд]      — открыть/поднять живую доску пула'
       )
-      $modeSel = Invoke-Fzf -Items $modeItems -Prompt 'Режим>' -Header ('Пул: ' + $pool.title + '  |  Esc — назад к пулам')
-      if (-not $modeSel) { break }                  # Esc на режиме -> шаг назад, к списку пулов
+      $actSel = Invoke-Fzf -Items $actItems -Prompt 'Действие>' -Header ('Пул: ' + $pool.title + '  |  Esc — назад к пулам')
+      if (-not $actSel) { break }                   # Esc на действии -> назад к списку пулов
 
-      $selected = $null
-      if ($modeSel.StartsWith('[Полный')) {
-        $selected = @($pool.roles.owner)
-      } elseif ($modeSel.StartsWith('[Ведущий')) {
-        $selected = @($pool.lead)
-      } else {
-        $rmap = [ordered]@{}
-        foreach ($r in $pool.roles) {
-          $mark = if ($r.lead) { '  [лид]' } else { '' }
-          $rmap[('{0}  ({1}){2}' -f $r.title, $r.owner, $mark)] = $r.owner
+      # ----- [Борд]: открыть живую доску (idempotent .bat -> board-window.ps1) -----
+      if ($actSel.StartsWith('[Борд')) {
+        if (-not $pool.root) { Write-Host 'Это control-сессия без пула — доски нет.' -ForegroundColor Yellow; Start-Sleep -Milliseconds 900; continue }
+        $boardBat = Join-Path $pool.root ('board-' + $pool.slug + '.bat')
+        if (Test-Path $boardBat) { Start-Process -FilePath $boardBat }
+        else {
+          $bw = Join-Path (Split-Path $Here -Parent) 'pool-bus\board-window.ps1'
+          Start-Process 'powershell' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$bw,'-BusRoot',(Join-Path $pool.root '.bus'))
         }
-        $rSel = Invoke-Fzf -Items ([string[]]$rmap.Keys) -Prompt 'Роли>' -Header 'TAB — отметить, Enter — запуск, Esc — назад к режиму' -Multi
-        if (-not $rSel) { continue }                # Esc на ролях -> шаг назад, к выбору режима
-        $selected = @($rSel | ForEach-Object { $rmap[[string]$_] })
+        Write-Host ('Доска "{0}" открыта.' -f $pool.title) -ForegroundColor Green
+        Start-Sleep -Milliseconds 700
+        continue                                     # назад к выбору действия
       }
-      if (-not $selected) { continue }              # ничего не выбрано -> назад к режиму
 
-      # генерация + запуск
-      $toml    = New-PoolToml $pool $selected
-      $cfgName = 'poollaunch-' + $pool.slug
-      if (-not (Test-Path $TabCfg)) { New-Item -ItemType Directory -Force -Path $TabCfg | Out-Null }
-      [System.IO.File]::WriteAllText((Join-Path $TabCfg ($cfgName + '.toml')), $toml, (New-Object System.Text.UTF8Encoding($false)))
-      Start-Process ('warp://tab_config/{0}?new_window=true' -f $cfgName)
+      $isShutdown = $actSel.StartsWith('[Завершить')
+      if ($isShutdown -and -not $pool.root) { Write-Host 'Control-сессия: завершение через контроллер не поддерживается.' -ForegroundColor Yellow; Start-Sleep -Milliseconds 900; continue }
+      $verb = if ($isShutdown) { 'Завершить' } else { 'Запустить' }
 
-      if (-not $mru) { $mru = New-Object psobject }
-      if ($mru.PSObject.Properties.Name -contains $pool.slug) { $mru.$($pool.slug) = (Get-Date).ToString('o') }
-      else { $mru | Add-Member -NotePropertyName $pool.slug -NotePropertyValue ((Get-Date).ToString('o')) }
-      Save-Mru $mru
+      while ($true) {                               # уровень РЕЖИМА (тот же пул + действие)
+        $modeItems = @(
+          ('[Полный]  — все роли ({0})' -f $pool.roles.Count),
+          ('[Ведущий] — только {0}' -f $pool.lead),
+          '[Выбрать вручную]'
+        )
+        $modeSel = Invoke-Fzf -Items $modeItems -Prompt 'Режим>' -Header ($verb + ' | Пул: ' + $pool.title + '  |  Esc — назад к действию')
+        if (-not $modeSel) { break }                # Esc на режиме -> назад к выбору действия
 
-      Write-Host ('Запущен пул "{0}". Роли: {1}' -f $pool.title, ($selected -join ', ')) -ForegroundColor Green
-      Write-Host 'Пустые панели можно доднять в Warp: Ctrl-Shift-R -> имя роли.' -ForegroundColor DarkGray
-      Start-Sleep -Milliseconds 700
-      break                                          # после запуска -> назад к списку пулов
+        $selected = $null
+        if ($modeSel.StartsWith('[Полный')) {
+          $selected = @($pool.roles.owner)
+        } elseif ($modeSel.StartsWith('[Ведущий')) {
+          $selected = @($pool.lead)
+        } else {
+          $rmap = [ordered]@{}
+          foreach ($r in $pool.roles) {
+            $mark = if ($r.lead) { '  [лид]' } else { '' }
+            $rmap[('{0}  ({1}){2}' -f $r.title, $r.owner, $mark)] = $r.owner
+          }
+          $rSel = Invoke-Fzf -Items ([string[]]$rmap.Keys) -Prompt 'Роли>' -Header ('TAB — отметить, Enter — ' + $verb + ', Esc — назад к режиму') -Multi
+          if (-not $rSel) { continue }              # Esc на ролях -> назад к режиму
+          $selected = @($rSel | ForEach-Object { $rmap[[string]$_] })
+        }
+        if (-not $selected) { continue }            # ничего не выбрано -> назад к режиму
+
+        # ----- [Завершить]: контроллер в отдельном окне (killer pool-safe; -Only при подмножестве ролей) -----
+        if ($isShutdown) {
+          $allRoles = ($selected.Count -eq $pool.roles.Count)
+          $scopeTxt = if ($allRoles) { 'ВЕСЬ пул' } else { ('роли: ' + ($selected -join ', ')) }
+          $confSel = Invoke-Fzf -Items @(('[Да] завершить — ' + $scopeTxt), '[Отмена]') -Prompt 'Подтверди>' -Header ('Завершить "' + $pool.title + '"? ' + $scopeTxt)
+          if (-not $confSel -or $confSel.StartsWith('[Отмена')) { continue }
+          $shPs1  = Join-Path (Split-Path $Here -Parent) 'pool-bus\pool-shutdown.ps1'
+          $psArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-File',$shPs1,'-Pool',$pool.slug,'-Full','-CloseWindow')
+          if (-not $allRoles) { $psArgs += @('-Only', ($selected -join ',')) }
+          Start-Process 'powershell' -ArgumentList $psArgs
+          Write-Host ('Завершение "{0}" запущено в отдельном окне ({1}). Compact-окна появятся отдельно.' -f $pool.title, $scopeTxt) -ForegroundColor Green
+          Start-Sleep -Milliseconds 700
+          break                                      # назад к выбору действия
+        }
+
+        # ----- [Запустить]: генерация Warp tab-config -----
+        $toml    = New-PoolToml $pool $selected
+        $cfgName = 'poollaunch-' + $pool.slug
+        if (-not (Test-Path $TabCfg)) { New-Item -ItemType Directory -Force -Path $TabCfg | Out-Null }
+        [System.IO.File]::WriteAllText((Join-Path $TabCfg ($cfgName + '.toml')), $toml, (New-Object System.Text.UTF8Encoding($false)))
+        Start-Process ('warp://tab_config/{0}?new_window=true' -f $cfgName)
+
+        if (-not $mru) { $mru = New-Object psobject }
+        if ($mru.PSObject.Properties.Name -contains $pool.slug) { $mru.$($pool.slug) = (Get-Date).ToString('o') }
+        else { $mru | Add-Member -NotePropertyName $pool.slug -NotePropertyValue ((Get-Date).ToString('o')) }
+        Save-Mru $mru
+
+        Write-Host ('Запущен пул "{0}". Роли: {1}' -f $pool.title, ($selected -join ', ')) -ForegroundColor Green
+        Write-Host 'Пустые панели можно доднять в Warp: Ctrl-Shift-R -> имя роли.' -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 700
+        break                                        # после запуска -> назад к выбору действия
+      }
     }
   }
 }

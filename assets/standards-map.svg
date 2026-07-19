@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="100%" style="max-width:1200px;height:auto;display:block" role="img" aria-labelledby="mapTitle mapDesc" preserveAspectRatio="xMidYMid meet" font-family="'Segoe UI', system-ui, -apple-system, Roboto, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 800" width="100%" style="max-width:1280px;height:auto;display:block" role="img" aria-labelledby="mapTitle mapDesc" preserveAspectRatio="xMidYMid meet" font-family="'Segoe UI', system-ui, -apple-system, Roboto, sans-serif">
   <title id="mapTitle">Claude Code — Multi-Agent Workspace Standards</title>
-  <desc id="mapDesc">A dependency map of eight standards blocks. Foundation is a full-width base slab; the Pool Coordination Bus is the glowing core; Workspace, Lifecycle, Roles and DevOps work over the bus; Skills delivers canon; Remote Bridge is an optional add-on plugged into the bus.</desc>
+  <desc id="mapDesc">A dependency map of nine standards blocks. Foundation is a full-width base slab; the Pool Coordination Bus is the glowing core; Pool Lifecycle Tooling (bring up) and Shutdown &amp; Context Hygiene (wind down) form a teal lifecycle pair beside the core; Workspace, Roles and DevOps work over the bus; Skills delivers canon; Remote Bridge is an optional add-on plugged into the bus.</desc>
 
   <style>
     text{font-family:'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;}
@@ -15,7 +15,7 @@
       <stop offset="0" stop-color="#141d29"/>
       <stop offset="1" stop-color="#0a0f16"/>
     </linearGradient>
-    <radialGradient id="dGlow" gradientUnits="userSpaceOnUse" cx="584" cy="362" r="270">
+    <radialGradient id="dGlow" gradientUnits="userSpaceOnUse" cx="584" cy="368" r="290">
       <stop offset="0" stop-color="#34ecd0" stop-opacity="0.32"/>
       <stop offset="0.45" stop-color="#34ecd0" stop-opacity="0.10"/>
       <stop offset="1" stop-color="#34ecd0" stop-opacity="0"/>
@@ -24,7 +24,7 @@
       <stop offset="0" stop-color="#123a31"/>
       <stop offset="1" stop-color="#0d201d"/>
     </linearGradient>
-    <radialGradient id="dInner" gradientUnits="userSpaceOnUse" cx="584" cy="200" r="230">
+    <radialGradient id="dInner" gradientUnits="userSpaceOnUse" cx="584" cy="210" r="240">
       <stop offset="0" stop-color="#6ff4de" stop-opacity="0.18"/>
       <stop offset="1" stop-color="#6ff4de" stop-opacity="0"/>
     </radialGradient>
@@ -34,8 +34,8 @@
   </defs>
 
   <!-- ===== CARD ===== -->
-  <rect x="10" y="10" width="1180" height="760" rx="24" fill="url(#cardGrad)" stroke="#26313f" stroke-width="1.5"/>
-  <rect x="10" y="10" width="1180" height="760" rx="24" fill="url(#dots)"/>
+  <rect x="10" y="10" width="1260" height="780" rx="24" fill="url(#cardGrad)" stroke="#26313f" stroke-width="1.5"/>
+  <rect x="10" y="10" width="1260" height="780" rx="24" fill="url(#dots)"/>
 
   <!-- ===== HEADER ===== -->
   <rect x="44" y="42" width="24" height="24" rx="7" fill="#123a31" stroke="#34ecd0" stroke-opacity="0.55"/>
@@ -43,235 +43,258 @@
   <rect x="50.5" y="51.5" width="5" height="5" rx="1" fill="#34ecd0"/>
   <rect x="56.5" y="51.5" width="5" height="5" rx="1" fill="#34ecd0"/>
   <text x="80" y="60" font-size="23" font-weight="700" fill="#eef2f8">Claude Code<tspan fill="#8494a8" font-weight="500">  ·  Multi-Agent Workspace Standards</tspan></text>
-  <text x="80" y="84" font-size="13" fill="#7e8ea3">A dependency map of the 8 standards blocks — what rests on what, and what feeds what.</text>
+  <text x="80" y="84" font-size="13" fill="#7e8ea3">A dependency map of the 9 standards blocks (A–I) — what rests on what, and what feeds what.</text>
 
   <!-- cluster key -->
-  <circle cx="770" cy="54" r="5" fill="#34ecd0"/><text x="781" y="58" font-size="11.5" fill="#93a3b7">Pool</text>
-  <circle cx="828" cy="54" r="5" fill="#83a0c4"/><text x="839" y="58" font-size="11.5" fill="#93a3b7">Structure</text>
-  <circle cx="917" cy="54" r="5" fill="#9a92f2"/><text x="928" y="58" font-size="11.5" fill="#93a3b7">Roles + DevOps</text>
-  <circle cx="1047" cy="54" r="5" fill="#f0b45c"/><text x="1058" y="58" font-size="11.5" fill="#93a3b7">Add-on</text>
+  <circle cx="850" cy="54" r="5" fill="#34ecd0"/><text x="861" y="58" font-size="11.5" fill="#93a3b7">Pool</text>
+  <circle cx="908" cy="54" r="5" fill="#83a0c4"/><text x="919" y="58" font-size="11.5" fill="#93a3b7">Structure</text>
+  <circle cx="997" cy="54" r="5" fill="#9a92f2"/><text x="1008" y="58" font-size="11.5" fill="#93a3b7">Roles + DevOps</text>
+  <circle cx="1128" cy="54" r="5" fill="#f0b45c"/><text x="1139" y="58" font-size="11.5" fill="#93a3b7">Add-on</text>
 
-  <line x1="44" y1="104" x2="1156" y2="104" stroke="#26313f" stroke-opacity="0.7"/>
+  <line x1="44" y1="108" x2="1236" y2="108" stroke="#26313f" stroke-opacity="0.7"/>
 
   <!-- ===== CONNECTORS (drawn under tiles so tiles sit OVER the bus) ===== -->
-  <!-- glow behind core -->
-  <rect x="330" y="150" width="508" height="450" fill="url(#dGlow)"/>
+  <rect x="310" y="150" width="548" height="470" fill="url(#dGlow)"/>
 
-  <!-- C / E / F / G taps into the bus -->
+  <!-- C / F / E / I tap the bus -->
   <g stroke="#34ecd0" stroke-opacity="0.6" stroke-width="1.6">
-    <line x1="412" y1="240" x2="432" y2="240"/>
-    <line x1="412" y1="484" x2="432" y2="484"/>
-    <line x1="756" y1="240" x2="736" y2="240"/>
-    <line x1="756" y1="484" x2="736" y2="484"/>
+    <line x1="404" y1="244" x2="424" y2="244"/>
+    <line x1="404" y1="492" x2="424" y2="492"/>
+    <line x1="764" y1="244" x2="744" y2="244"/>
+    <line x1="764" y1="492" x2="744" y2="492"/>
   </g>
   <g fill="#34ecd0">
-    <circle cx="411" cy="240" r="3.2"/><circle cx="411" cy="484" r="3.2"/>
-    <circle cx="757" cy="240" r="3.2"/><circle cx="757" cy="484" r="3.2"/>
-    <rect x="428" y="236" width="8" height="8" rx="2"/><rect x="428" y="480" width="8" height="8" rx="2"/>
-    <rect x="732" y="236" width="8" height="8" rx="2"/><rect x="732" y="480" width="8" height="8" rx="2"/>
+    <circle cx="403" cy="244" r="3.2"/><circle cx="403" cy="492" r="3.2"/>
+    <circle cx="765" cy="244" r="3.2"/><circle cx="765" cy="492" r="3.2"/>
+    <rect x="420" y="240" width="8" height="8" rx="2"/><rect x="420" y="488" width="8" height="8" rx="2"/>
+    <rect x="740" y="240" width="8" height="8" rx="2"/><rect x="740" y="488" width="8" height="8" rx="2"/>
   </g>
 
-  <!-- H optional add-on plugged into the bus (dashed) -->
-  <line x1="736" y1="362" x2="1024" y2="362" stroke="#f0b45c" stroke-width="1.6" stroke-dasharray="6 5" stroke-opacity="0.75"/>
-  <rect x="732" y="358" width="8" height="8" rx="2" fill="#f0b45c"/>
-  <path d="M1024 362 l-9 -5 l0 10 z" fill="#f0b45c"/>
+  <!-- bus extends right, feeds G (over the bus) and H (optional add-on) -->
+  <rect x="740" y="364" width="8" height="8" rx="2" fill="#34ecd0"/>
+  <line x1="744" y1="368" x2="1020" y2="368" stroke="#34ecd0" stroke-width="1.8" stroke-opacity="0.65"/>
+  <circle cx="1020" cy="368" r="3.5" fill="#34ecd0"/>
+  <!-- riser up to G -->
+  <line x1="1020" y1="368" x2="1020" y2="244" stroke="#34ecd0" stroke-width="1.6" stroke-opacity="0.6"/>
+  <line x1="1020" y1="244" x2="1032" y2="244" stroke="#34ecd0" stroke-width="1.6" stroke-opacity="0.6"/>
+  <circle cx="1032" cy="244" r="3.2" fill="#34ecd0"/>
+  <!-- dashed branch down to H (optional) -->
+  <line x1="1020" y1="368" x2="1020" y2="494" stroke="#f0b45c" stroke-width="1.6" stroke-dasharray="6 5" stroke-opacity="0.75"/>
+  <line x1="1020" y1="494" x2="1040" y2="494" stroke="#f0b45c" stroke-width="1.6" stroke-dasharray="6 5" stroke-opacity="0.75"/>
+  <path d="M1040 494 l-9 -5 l0 10 z" fill="#f0b45c"/>
 
   <!-- B delivers canon (chevrons feeding the cluster) -->
   <g stroke="#9aa6f2" stroke-width="2" fill="none" stroke-opacity="0.85" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M142 204 l7 6 l-7 6"/><line x1="142" y1="210" x2="158" y2="210"/>
-    <path d="M142 356 l7 6 l-7 6"/><line x1="142" y1="362" x2="158" y2="362"/>
-    <path d="M142 508 l7 6 l-7 6"/><line x1="142" y1="514" x2="158" y2="514"/>
+    <path d="M138 210 l7 6 l-7 6"/><line x1="138" y1="216" x2="154" y2="216"/>
+    <path d="M138 362 l7 6 l-7 6"/><line x1="138" y1="368" x2="154" y2="368"/>
+    <path d="M138 520 l7 6 l-7 6"/><line x1="138" y1="526" x2="154" y2="526"/>
   </g>
-  <!-- B feeds down into the foundation -->
-  <line x1="92" y1="598" x2="92" y2="612" stroke="#9aa6f2" stroke-width="2" stroke-opacity="0.7"/>
-  <path d="M86 606 l6 7 l6 -7" fill="none" stroke="#9aa6f2" stroke-width="2" stroke-opacity="0.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="90" y1="606" x2="90" y2="620" stroke="#9aa6f2" stroke-width="2" stroke-opacity="0.7"/>
+  <path d="M84 614 l6 7 l6 -7" fill="none" stroke="#9aa6f2" stroke-width="2" stroke-opacity="0.7" stroke-linecap="round" stroke-linejoin="round"/>
 
-  <!-- cluster rests on foundation (support ticks) -->
+  <!-- cluster rests on the foundation -->
   <g stroke="#83a0c4" stroke-opacity="0.5" stroke-width="1.4" stroke-dasharray="2 3">
-    <line x1="286" y1="598" x2="286" y2="613"/>
-    <line x1="584" y1="598" x2="584" y2="613"/>
-    <line x1="882" y1="598" x2="882" y2="613"/>
+    <line x1="280" y1="606" x2="280" y2="621"/>
+    <line x1="584" y1="606" x2="584" y2="621"/>
+    <line x1="888" y1="606" x2="888" y2="621"/>
   </g>
 
   <!-- ============================================================= -->
-  <!-- ===== TILE B : Skills System (slim delivery rail) ===== -->
+  <!-- ===== B : Skills System (slim delivery rail) ===== -->
   <g>
-    <rect x="44" y="128" width="96" height="468" rx="16" fill="#151827" stroke="#9aa6f2" stroke-opacity="0.30"/>
-    <line x1="58" y1="129" x2="126" y2="129" stroke="#ffffff" stroke-opacity="0.05"/>
-    <rect x="76" y="140" width="32" height="32" rx="9" fill="#9aa6f2" fill-opacity="0.16" stroke="#9aa6f2" stroke-opacity="0.5"/>
-    <text x="92" y="162" text-anchor="middle" font-size="17" font-weight="700" fill="#b7c0f6">B</text>
-    <!-- glyph: thin stub in front of hoisted canon -->
-    <g transform="translate(80 186)" fill="none" stroke="#9aa6f2" stroke-width="1.8">
+    <rect x="44" y="132" width="92" height="472" rx="16" fill="#151827" stroke="#9aa6f2" stroke-opacity="0.30"/>
+    <line x1="58" y1="133" x2="122" y2="133" stroke="#ffffff" stroke-opacity="0.05"/>
+    <rect x="74" y="144" width="32" height="32" rx="9" fill="#9aa6f2" fill-opacity="0.16" stroke="#9aa6f2" stroke-opacity="0.5"/>
+    <text x="90" y="166" text-anchor="middle" font-size="17" font-weight="700" fill="#b7c0f6">B</text>
+    <g transform="translate(78 190)" fill="none" stroke="#9aa6f2" stroke-width="1.8">
       <rect x="7" y="3" width="14" height="17" rx="2"/>
       <rect x="2" y="8" width="12" height="13" rx="2" fill="#151827"/>
     </g>
-    <text transform="translate(101 386) rotate(-90)" text-anchor="middle" class="nm" font-size="17" fill="#eef2f8">SKILLS SYSTEM</text>
-    <text transform="translate(80 386) rotate(-90)" text-anchor="middle" class="mono" font-size="11" fill="#8a93c9">delivers canon</text>
-    <text transform="translate(64 386) rotate(-90)" text-anchor="middle" class="ey" fill="#9aa6f2" fill-opacity="0.85" letter-spacing="2">DELIVERY</text>
+    <text transform="translate(101 392) rotate(-90)" text-anchor="middle" class="nm" font-size="17" fill="#eef2f8">SKILLS SYSTEM</text>
+    <text transform="translate(80 392) rotate(-90)" text-anchor="middle" class="mono" font-size="11" fill="#8a93c9">delivers canon</text>
+    <text transform="translate(64 392) rotate(-90)" text-anchor="middle" class="ey" fill="#9aa6f2" fill-opacity="0.85" letter-spacing="2">DELIVERY</text>
   </g>
 
-  <!-- ===== TILE C : Workspace Organization ===== -->
+  <!-- ===== C : Workspace Organization ===== -->
   <g>
-    <rect x="160" y="128" width="252" height="224" rx="16" fill="#131f2a" stroke="#83a0c4" stroke-opacity="0.30"/>
-    <line x1="174" y1="129" x2="398" y2="129" stroke="#ffffff" stroke-opacity="0.05"/>
-    <rect x="178" y="146" width="32" height="32" rx="9" fill="#83a0c4" fill-opacity="0.16" stroke="#83a0c4" stroke-opacity="0.5"/>
-    <text x="194" y="168" text-anchor="middle" font-size="17" font-weight="700" fill="#a8c0dc">C</text>
-    <g transform="translate(360 148)" fill="none" stroke="#83a0c4" stroke-width="1.8" stroke-linejoin="round">
+    <rect x="156" y="132" width="248" height="224" rx="16" fill="#131f2a" stroke="#83a0c4" stroke-opacity="0.30"/>
+    <line x1="170" y1="133" x2="390" y2="133" stroke="#ffffff" stroke-opacity="0.05"/>
+    <rect x="174" y="150" width="32" height="32" rx="9" fill="#83a0c4" fill-opacity="0.16" stroke="#83a0c4" stroke-opacity="0.5"/>
+    <text x="190" y="172" text-anchor="middle" font-size="17" font-weight="700" fill="#a8c0dc">C</text>
+    <g transform="translate(354 152)" fill="none" stroke="#83a0c4" stroke-width="1.8" stroke-linejoin="round">
       <path d="M2 8 v10 a2 2 0 0 0 2 2 h16 a2 2 0 0 0 2 -2 v-8 a2 2 0 0 0 -2 -2 h-8 l-2 -2 h-6 a2 2 0 0 0 -2 2 z"/>
     </g>
-    <text x="180" y="205" class="ey" fill="#83a0c4">STRUCTURE</text>
-    <text x="180" y="233" class="nm" font-size="18.5" fill="#eef2f8">Workspace</text>
-    <text x="180" y="256" class="nm" font-size="18.5" fill="#eef2f8">Organization</text>
-    <text x="180" y="290" class="pp">How the workspace / monorepo &amp;</text>
-    <text x="180" y="308" class="pp">numbered folders are laid out</text>
+    <text x="176" y="212" class="ey" fill="#83a0c4">STRUCTURE</text>
+    <text x="176" y="240" class="nm" font-size="18.5" fill="#eef2f8">Workspace</text>
+    <text x="176" y="263" class="nm" font-size="18.5" fill="#eef2f8">Organization</text>
+    <text x="176" y="296" class="pp">How the workspace / monorepo &amp;</text>
+    <text x="176" y="314" class="pp">numbered folders are laid out</text>
   </g>
 
-  <!-- ===== TILE F : Roles & Working Style ===== -->
+  <!-- ===== F : Roles & Working Style ===== -->
   <g>
-    <rect x="160" y="372" width="252" height="224" rx="16" fill="#181927" stroke="#9a92f2" stroke-opacity="0.30"/>
-    <line x1="174" y1="373" x2="398" y2="373" stroke="#ffffff" stroke-opacity="0.05"/>
-    <rect x="178" y="390" width="32" height="32" rx="9" fill="#9a92f2" fill-opacity="0.16" stroke="#9a92f2" stroke-opacity="0.5"/>
-    <text x="194" y="412" text-anchor="middle" font-size="17" font-weight="700" fill="#bbb4f6">F</text>
-    <g transform="translate(360 392)" fill="none" stroke="#9a92f2" stroke-width="1.7">
+    <rect x="156" y="380" width="248" height="224" rx="16" fill="#181927" stroke="#9a92f2" stroke-opacity="0.30"/>
+    <line x1="170" y1="381" x2="390" y2="381" stroke="#ffffff" stroke-opacity="0.05"/>
+    <rect x="174" y="398" width="32" height="32" rx="9" fill="#9a92f2" fill-opacity="0.16" stroke="#9a92f2" stroke-opacity="0.5"/>
+    <text x="190" y="420" text-anchor="middle" font-size="17" font-weight="700" fill="#bbb4f6">F</text>
+    <g transform="translate(354 400)" fill="none" stroke="#9a92f2" stroke-width="1.7">
       <circle cx="8" cy="8" r="3.2"/><path d="M2.5 20 a5.5 5.5 0 0 1 11 0"/>
       <circle cx="16" cy="9.5" r="2.8"/><path d="M12 20 a5 5 0 0 1 9.5 -1"/>
     </g>
-    <text x="180" y="449" class="ey" fill="#9a92f2">THE TEAM</text>
-    <text x="180" y="477" class="nm" font-size="18.5" fill="#eef2f8">Roles &amp;</text>
-    <text x="180" y="500" class="nm" font-size="18.5" fill="#eef2f8">Working Style</text>
-    <text x="180" y="534" class="pp">Who the agents are + the standing</text>
-    <text x="180" y="552" class="pp">behavior every agent follows</text>
+    <text x="176" y="460" class="ey" fill="#9a92f2">THE TEAM</text>
+    <text x="176" y="488" class="nm" font-size="18.5" fill="#eef2f8">Roles &amp;</text>
+    <text x="176" y="511" class="nm" font-size="18.5" fill="#eef2f8">Working Style</text>
+    <text x="176" y="544" class="pp">Who the agents are + the standing</text>
+    <text x="176" y="562" class="pp">behavior every agent follows</text>
   </g>
 
-  <!-- ===== TILE E : Pool Lifecycle Tooling ===== -->
+  <!-- ===== E : Pool Lifecycle Tooling — BRING UP ===== -->
   <g>
-    <rect x="756" y="128" width="252" height="224" rx="16" fill="#122420" stroke="#55c9b7" stroke-opacity="0.32"/>
-    <line x1="770" y1="129" x2="994" y2="129" stroke="#ffffff" stroke-opacity="0.05"/>
-    <rect x="774" y="146" width="32" height="32" rx="9" fill="#55c9b7" fill-opacity="0.16" stroke="#55c9b7" stroke-opacity="0.5"/>
-    <text x="790" y="168" text-anchor="middle" font-size="17" font-weight="700" fill="#7fd9ca">E</text>
-    <g transform="translate(956 152)" fill="none" stroke="#55c9b7" stroke-width="1.7">
+    <rect x="764" y="132" width="248" height="224" rx="16" fill="#122420" stroke="#55c9b7" stroke-opacity="0.32"/>
+    <line x1="778" y1="133" x2="998" y2="133" stroke="#ffffff" stroke-opacity="0.05"/>
+    <rect x="782" y="150" width="32" height="32" rx="9" fill="#55c9b7" fill-opacity="0.16" stroke="#55c9b7" stroke-opacity="0.5"/>
+    <text x="798" y="172" text-anchor="middle" font-size="17" font-weight="700" fill="#7fd9ca">E</text>
+    <g transform="translate(962 156)" fill="none" stroke="#55c9b7" stroke-width="1.7">
       <circle cx="4" cy="12" r="3"/><line x1="7" y1="12" x2="9" y2="12"/>
       <circle cx="12" cy="12" r="3"/><line x1="15" y1="12" x2="17" y2="12"/>
       <circle cx="21" cy="12" r="3"/>
     </g>
-    <text x="776" y="205" class="ey" fill="#55c9b7">POOL TOOLING</text>
-    <text x="776" y="233" class="nm" font-size="18.5" fill="#eef2f8">Pool Lifecycle</text>
-    <text x="776" y="256" class="nm" font-size="18.5" fill="#eef2f8">Tooling</text>
-    <text x="776" y="290" class="pp">Scaffold → launch → observe a pool:</text>
-    <text x="776" y="308" class="pp">generators, picker, board, watcher</text>
+    <text x="784" y="212" class="ey" fill="#55c9b7">BRING UP &amp; OBSERVE</text>
+    <text x="784" y="240" class="nm" font-size="18.5" fill="#eef2f8">Pool Lifecycle</text>
+    <text x="784" y="263" class="nm" font-size="18.5" fill="#eef2f8">Tooling</text>
+    <text x="784" y="296" class="pp">Scaffold → launch → observe a pool:</text>
+    <text x="784" y="314" class="pp">generators, picker, board, watcher</text>
   </g>
 
-  <!-- ===== TILE G : DevOps & Self-Healing ===== -->
+  <!-- ===== I : Shutdown & Context Hygiene — WIND DOWN (new) ===== -->
   <g>
-    <rect x="756" y="372" width="252" height="224" rx="16" fill="#191826" stroke="#a98ff3" stroke-opacity="0.30"/>
-    <line x1="770" y1="373" x2="994" y2="373" stroke="#ffffff" stroke-opacity="0.05"/>
-    <rect x="774" y="390" width="32" height="32" rx="9" fill="#a98ff3" fill-opacity="0.16" stroke="#a98ff3" stroke-opacity="0.5"/>
-    <text x="790" y="412" text-anchor="middle" font-size="17" font-weight="700" fill="#c4b0f7">G</text>
-    <g transform="translate(956 392)" fill="none" stroke="#a98ff3" stroke-width="1.7" stroke-linecap="round">
+    <rect x="764" y="380" width="248" height="224" rx="16" fill="#122420" stroke="#55c9b7" stroke-opacity="0.32"/>
+    <line x1="778" y1="381" x2="998" y2="381" stroke="#ffffff" stroke-opacity="0.05"/>
+    <rect x="782" y="398" width="32" height="32" rx="9" fill="#55c9b7" fill-opacity="0.16" stroke="#55c9b7" stroke-opacity="0.5"/>
+    <text x="798" y="420" text-anchor="middle" font-size="17" font-weight="700" fill="#7fd9ca">I</text>
+    <g transform="translate(962 404)" fill="none" stroke="#55c9b7" stroke-width="1.8" stroke-linecap="round">
+      <line x1="12" y1="2" x2="12" y2="11"/>
+      <path d="M7 7 A8 8 0 1 0 17 7"/>
+    </g>
+    <text x="784" y="460" class="ey" fill="#55c9b7">WIND DOWN &amp; REFRESH</text>
+    <text x="784" y="488" class="nm" font-size="18.5" fill="#eef2f8">Shutdown &amp;</text>
+    <text x="784" y="511" class="nm" font-size="18.5" fill="#eef2f8">Context Hygiene</text>
+    <text x="784" y="542" font-size="11.5" fill="#93a3b7">Wind down cleanly, keep context fresh:</text>
+    <text x="784" y="559" font-size="11.5" fill="#93a3b7">handoff → compact → kill, light-close</text>
+    <text x="784" y="576" font-size="11.5" fill="#93a3b7">threshold, pult as control surface</text>
+  </g>
+
+  <!-- ===== G : DevOps & Self-Healing ===== -->
+  <g>
+    <rect x="1032" y="132" width="204" height="224" rx="16" fill="#191826" stroke="#a98ff3" stroke-opacity="0.30"/>
+    <line x1="1046" y1="133" x2="1222" y2="133" stroke="#ffffff" stroke-opacity="0.05"/>
+    <rect x="1050" y="150" width="32" height="32" rx="9" fill="#a98ff3" fill-opacity="0.16" stroke="#a98ff3" stroke-opacity="0.5"/>
+    <text x="1066" y="172" text-anchor="middle" font-size="17" font-weight="700" fill="#c4b0f7">G</text>
+    <g transform="translate(1190 152)" fill="none" stroke="#a98ff3" stroke-width="1.7" stroke-linecap="round">
       <path d="M20 12 a8 8 0 1 1 -2.4 -5.6"/>
       <path d="M21 3 l-3 3.5 l4 0.6" fill="#a98ff3" stroke="none"/>
     </g>
-    <text x="776" y="449" class="ey" fill="#a98ff3">OPERATIONS</text>
-    <text x="776" y="477" class="nm" font-size="18.5" fill="#eef2f8">DevOps &amp;</text>
-    <text x="776" y="500" class="nm" font-size="18.5" fill="#eef2f8">Self-Healing</text>
-    <text x="776" y="534" class="pp">Two-layer DevOps + closed-loop</text>
-    <text x="776" y="552" class="pp">SRE pipeline for production</text>
+    <text x="1052" y="212" class="ey" fill="#a98ff3">OPERATIONS</text>
+    <text x="1052" y="240" class="nm" font-size="18.5" fill="#eef2f8">DevOps &amp;</text>
+    <text x="1052" y="263" class="nm" font-size="18.5" fill="#eef2f8">Self-Healing</text>
+    <text x="1052" y="296" font-size="11.5" fill="#93a3b7">Two-layer DevOps +</text>
+    <text x="1052" y="313" font-size="11.5" fill="#93a3b7">closed-loop SRE</text>
+    <text x="1052" y="330" font-size="11.5" fill="#93a3b7">pipeline for production</text>
   </g>
 
-  <!-- ===== TILE H : Remote Bridge (detached, dashed) ===== -->
+  <!-- ===== H : Remote Bridge (detached, dashed) ===== -->
   <g>
-    <rect x="1028" y="278" width="128" height="168" rx="15" fill="#211a12" stroke="#f0b45c" stroke-opacity="0.6" stroke-width="1.4" stroke-dasharray="6 4"/>
-    <rect x="1046" y="296" width="30" height="30" rx="8" fill="#f0b45c" fill-opacity="0.16" stroke="#f0b45c" stroke-opacity="0.55"/>
-    <text x="1061" y="317" text-anchor="middle" font-size="16" font-weight="700" fill="#f3c584">H</text>
-    <g transform="translate(1112 300)" stroke="#f0b45c" stroke-width="1.6" stroke-linejoin="round">
+    <rect x="1040" y="404" width="188" height="180" rx="15" fill="#211a12" stroke="#f0b45c" stroke-opacity="0.6" stroke-width="1.4" stroke-dasharray="6 4"/>
+    <rect x="1058" y="422" width="30" height="30" rx="8" fill="#f0b45c" fill-opacity="0.16" stroke="#f0b45c" stroke-opacity="0.55"/>
+    <text x="1073" y="443" text-anchor="middle" font-size="16" font-weight="700" fill="#f3c584">H</text>
+    <g transform="translate(1186 426)" stroke="#f0b45c" stroke-width="1.6" stroke-linejoin="round">
       <path d="M2 11 L20 3 L14 20 L10 13 Z" fill="#f0b45c" fill-opacity="0.15"/>
       <line x1="10" y1="13" x2="20" y2="3" fill="none"/>
     </g>
-    <text x="1047" y="352" class="ey" fill="#f0b45c" letter-spacing="1.5">OPTIONAL</text>
-    <text x="1047" y="376" class="nm" font-size="17" fill="#eef2f8">Remote</text>
-    <text x="1047" y="395" class="nm" font-size="17" fill="#eef2f8">Bridge</text>
-    <text x="1047" y="417" font-size="11" fill="#9a8a70">Drive a live pool</text>
-    <text x="1047" y="431" font-size="11" fill="#9a8a70">from your phone</text>
-    <text x="1047" y="445" class="mono" font-size="10.5" fill="#f0b45c" fill-opacity="0.85">via Telegram</text>
+    <text x="1058" y="472" class="ey" fill="#f0b45c" letter-spacing="1.5">OPTIONAL ADD-ON</text>
+    <text x="1058" y="498" class="nm" font-size="17" fill="#eef2f8">Remote</text>
+    <text x="1058" y="517" class="nm" font-size="17" fill="#eef2f8">Bridge</text>
+    <text x="1058" y="539" font-size="11" fill="#9a8a70">Drive a live pool</text>
+    <text x="1058" y="554" font-size="11" fill="#9a8a70">from your phone</text>
+    <text x="1058" y="569" class="mono" font-size="10.5" fill="#f0b45c" fill-opacity="0.85">via Telegram</text>
   </g>
 
-  <!-- ===== TILE D : Pool Coordination Bus (CORE) ===== -->
+  <!-- ===== D : Pool Coordination Bus (CORE) ===== -->
   <g>
-    <rect x="432" y="128" width="304" height="468" rx="18" fill="url(#dFill)" stroke="#34ecd0" stroke-opacity="0.65" stroke-width="1.6"/>
-    <rect x="432" y="128" width="304" height="468" rx="18" fill="url(#dInner)"/>
-    <rect x="440" y="136" width="288" height="452" rx="14" fill="none" stroke="#34ecd0" stroke-opacity="0.12"/>
+    <rect x="424" y="132" width="320" height="472" rx="18" fill="url(#dFill)" stroke="#34ecd0" stroke-opacity="0.65" stroke-width="1.6"/>
+    <rect x="424" y="132" width="320" height="472" rx="18" fill="url(#dInner)"/>
+    <rect x="432" y="140" width="304" height="456" rx="14" fill="none" stroke="#34ecd0" stroke-opacity="0.12"/>
 
-    <rect x="452" y="150" width="40" height="40" rx="11" fill="#34ecd0"/>
-    <text x="472" y="178" text-anchor="middle" font-size="21" font-weight="800" fill="#08201c">D</text>
-    <text x="504" y="166" class="ey" fill="#34ecd0" letter-spacing="2.5">THE CORE</text>
-    <text x="504" y="184" class="mono" font-size="11" fill="#63c7b6">the maildir bus</text>
+    <rect x="444" y="154" width="40" height="40" rx="11" fill="#34ecd0"/>
+    <text x="464" y="182" text-anchor="middle" font-size="21" font-weight="800" fill="#08201c">D</text>
+    <text x="498" y="170" class="ey" fill="#34ecd0" letter-spacing="2.5">THE CORE</text>
+    <text x="498" y="188" class="mono" font-size="11" fill="#63c7b6">the maildir bus</text>
 
-    <text x="452" y="252" class="nm" font-size="29" fill="#f3fbf9">Pool Coordination</text>
-    <text x="452" y="288" class="nm" font-size="29" fill="#f3fbf9">Bus</text>
+    <text x="444" y="254" class="nm" font-size="29" fill="#f3fbf9">Pool Coordination</text>
+    <text x="444" y="290" class="nm" font-size="29" fill="#f3fbf9">Bus</text>
 
-    <text x="452" y="328" font-size="13.5" fill="#a7c7c0">A file-based maildir protocol so many</text>
-    <text x="452" y="348" font-size="13.5" fill="#a7c7c0">sessions coordinate — no dispatcher</text>
+    <text x="444" y="330" font-size="13.5" fill="#a7c7c0">A file-based maildir protocol so many</text>
+    <text x="444" y="350" font-size="13.5" fill="#a7c7c0">sessions coordinate — no dispatcher</text>
 
-    <!-- bus emblem -->
-    <text x="584" y="394" text-anchor="middle" class="mono" font-size="11" fill="#6bbfae">N sessions  ·  one shared protocol</text>
-    <rect x="460" y="404" width="248" height="14" rx="7" fill="#34ecd0" fill-opacity="0.13" stroke="#34ecd0" stroke-opacity="0.45"/>
+    <text x="584" y="396" text-anchor="middle" class="mono" font-size="11" fill="#6bbfae">N sessions  ·  one shared protocol</text>
+    <rect x="452" y="408" width="264" height="14" rx="7" fill="#34ecd0" fill-opacity="0.13" stroke="#34ecd0" stroke-opacity="0.45"/>
     <g fill="#34ecd0">
-      <rect x="500.5" y="406.5" width="9" height="9" rx="2"/>
-      <rect x="551.5" y="406.5" width="9" height="9" rx="2"/>
-      <rect x="602.5" y="406.5" width="9" height="9" rx="2"/>
-      <rect x="653.5" y="406.5" width="9" height="9" rx="2"/>
+      <rect x="500.5" y="410.5" width="9" height="9" rx="2"/>
+      <rect x="553.5" y="410.5" width="9" height="9" rx="2"/>
+      <rect x="605.5" y="410.5" width="9" height="9" rx="2"/>
+      <rect x="658.5" y="410.5" width="9" height="9" rx="2"/>
     </g>
-    <text x="584" y="440" text-anchor="middle" class="mono" font-size="11" fill="#6bbfae" fill-opacity="0.9">drops to  C · E · F · G</text>
+    <text x="584" y="444" text-anchor="middle" class="mono" font-size="11" fill="#6bbfae" fill-opacity="0.9">drops to  C · E · I · F · G</text>
 
-    <!-- protocol chips -->
     <g>
-      <rect x="469" y="464" width="96" height="26" rx="8" fill="#34ecd0" fill-opacity="0.07" stroke="#34ecd0" stroke-opacity="0.35"/>
-      <text x="517" y="481" text-anchor="middle" class="mono" font-size="10.5" fill="#7fd6c6">inbox / outbox</text>
-      <rect x="575" y="464" width="64" height="26" rx="8" fill="#34ecd0" fill-opacity="0.07" stroke="#34ecd0" stroke-opacity="0.35"/>
-      <text x="607" y="481" text-anchor="middle" class="mono" font-size="10.5" fill="#7fd6c6">atomic</text>
-      <rect x="649" y="464" width="50" height="26" rx="8" fill="#34ecd0" fill-opacity="0.07" stroke="#34ecd0" stroke-opacity="0.35"/>
-      <text x="674" y="481" text-anchor="middle" class="mono" font-size="10.5" fill="#7fd6c6">pull</text>
+      <rect x="471" y="466" width="96" height="26" rx="8" fill="#34ecd0" fill-opacity="0.07" stroke="#34ecd0" stroke-opacity="0.35"/>
+      <text x="519" y="483" text-anchor="middle" class="mono" font-size="10.5" fill="#7fd6c6">inbox / outbox</text>
+      <rect x="575" y="466" width="64" height="26" rx="8" fill="#34ecd0" fill-opacity="0.07" stroke="#34ecd0" stroke-opacity="0.35"/>
+      <text x="607" y="483" text-anchor="middle" class="mono" font-size="10.5" fill="#7fd6c6">atomic</text>
+      <rect x="647" y="466" width="50" height="26" rx="8" fill="#34ecd0" fill-opacity="0.07" stroke="#34ecd0" stroke-opacity="0.35"/>
+      <text x="672" y="483" text-anchor="middle" class="mono" font-size="10.5" fill="#7fd6c6">pull</text>
     </g>
 
-    <!-- spine caption -->
-    <rect x="466" y="524" width="236" height="28" rx="14" fill="#34ecd0" fill-opacity="0.06" stroke="#34ecd0" stroke-opacity="0.30"/>
-    <text x="584" y="542" text-anchor="middle" class="mono" font-size="12" fill="#8fe0d1">A → C → D → E · F · G</text>
+    <rect x="474" y="524" width="220" height="28" rx="14" fill="#34ecd0" fill-opacity="0.06" stroke="#34ecd0" stroke-opacity="0.30"/>
+    <text x="584" y="542" text-anchor="middle" class="mono" font-size="12" fill="#8fe0d1">A → C → D → E → I → F · G</text>
   </g>
 
-  <!-- ===== TILE A : Foundation base slab (full width) ===== -->
+  <!-- ===== A : Foundation base slab (full width) ===== -->
   <g>
-    <rect x="44" y="616" width="1112" height="108" rx="16" fill="#15212d" stroke="#83a0c4" stroke-opacity="0.34"/>
-    <line x1="58" y1="617" x2="1142" y2="617" stroke="#ffffff" stroke-opacity="0.05"/>
-    <rect x="64" y="644" width="40" height="40" rx="11" fill="#83a0c4" fill-opacity="0.18" stroke="#83a0c4" stroke-opacity="0.55"/>
-    <text x="84" y="672" text-anchor="middle" font-size="21" font-weight="700" fill="#a8c0dc">A</text>
-    <g transform="translate(120 644)" fill="none" stroke="#83a0c4" stroke-width="1.8">
+    <rect x="44" y="624" width="1192" height="108" rx="16" fill="#15212d" stroke="#83a0c4" stroke-opacity="0.34"/>
+    <line x1="58" y1="625" x2="1222" y2="625" stroke="#ffffff" stroke-opacity="0.05"/>
+    <rect x="64" y="652" width="40" height="40" rx="11" fill="#83a0c4" fill-opacity="0.18" stroke="#83a0c4" stroke-opacity="0.55"/>
+    <text x="84" y="680" text-anchor="middle" font-size="21" font-weight="700" fill="#a8c0dc">A</text>
+    <g transform="translate(120 652)" fill="none" stroke="#83a0c4" stroke-width="1.8">
       <rect x="1" y="14" width="24" height="5" rx="2"/>
       <rect x="4" y="7.5" width="18" height="5" rx="2"/>
       <rect x="7" y="1" width="12" height="5" rx="2"/>
     </g>
-    <text x="160" y="648" class="ey" fill="#83a0c4" letter-spacing="2">FOUNDATION · BASE SLAB — EVERYTHING RESTS HERE</text>
-    <text x="160" y="678" class="nm" font-size="22" fill="#eef2f8">Environment &amp; Safety</text>
-    <text x="160" y="702" font-size="13" fill="#8a9bb0">Make a Windows machine + Claude Code safe &amp; correct before anything runs</text>
+    <text x="160" y="656" class="ey" fill="#83a0c4" letter-spacing="2">FOUNDATION · BASE SLAB — EVERYTHING RESTS HERE</text>
+    <text x="160" y="686" class="nm" font-size="22" fill="#eef2f8">Environment &amp; Safety</text>
+    <text x="160" y="710" font-size="13" fill="#8a9bb0">Make a Windows machine + Claude Code safe &amp; correct before anything runs</text>
 
-    <!-- guard chips -->
     <g class="mono" font-size="10.5">
-      <rect x="726" y="650" width="126" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
-      <text x="789" y="668" text-anchor="middle" fill="#a8c0dc">PowerShell + UTF-8</text>
-      <rect x="862" y="650" width="84" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
-      <text x="904" y="668" text-anchor="middle" fill="#a8c0dc">rm guard</text>
-      <rect x="956" y="650" width="76" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
-      <text x="994" y="668" text-anchor="middle" fill="#a8c0dc">secrets</text>
-      <rect x="1042" y="650" width="94" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
-      <text x="1089" y="668" text-anchor="middle" fill="#a8c0dc">MCP + Chrome</text>
+      <rect x="656" y="660" width="126" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
+      <text x="719" y="678" text-anchor="middle" fill="#a8c0dc">PowerShell + UTF-8</text>
+      <rect x="794" y="660" width="84" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
+      <text x="836" y="678" text-anchor="middle" fill="#a8c0dc">rm guard</text>
+      <rect x="890" y="660" width="76" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
+      <text x="928" y="678" text-anchor="middle" fill="#a8c0dc">secrets</text>
+      <rect x="978" y="660" width="116" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
+      <text x="1036" y="678" text-anchor="middle" fill="#a8c0dc">reliability hooks</text>
+      <rect x="1106" y="660" width="110" height="28" rx="9" fill="#83a0c4" fill-opacity="0.08" stroke="#83a0c4" stroke-opacity="0.35"/>
+      <text x="1161" y="678" text-anchor="middle" fill="#a8c0dc">MCP + Chrome</text>
     </g>
   </g>
 
   <!-- ===== SPINE LEGEND ===== -->
   <g font-size="12" fill="#8494a8">
-    <circle cx="50" cy="746" r="5" fill="#83a0c4"/><text x="61" y="750">A · base slab</text>
-    <circle cx="182" cy="746" r="5" fill="#9aa6f2"/><text x="193" y="750">B · delivers canon →</text>
-    <rect x="352" y="741" width="10" height="10" rx="2" fill="#34ecd0"/><text x="368" y="750">D · core maildir bus</text>
-    <circle cx="530" cy="746" r="5" fill="#55c9b7"/><text x="541" y="750">C · E · F · G work over the bus</text>
-    <circle cx="756" cy="746" r="5" fill="#f0b45c"/><text x="767" y="750">H · optional add-on plugs into D</text>
+    <circle cx="50" cy="760" r="5" fill="#83a0c4"/><text x="61" y="764">A · base slab</text>
+    <circle cx="176" cy="760" r="5" fill="#9aa6f2"/><text x="187" y="764">B · delivers canon →</text>
+    <rect x="330" y="755" width="10" height="10" rx="2" fill="#34ecd0"/><text x="346" y="764">D · core maildir bus</text>
+    <circle cx="500" cy="760" r="5" fill="#55c9b7"/><text x="511" y="764">E → I · lifecycle pair (bring up / wind down)</text>
+    <circle cx="788" cy="760" r="5" fill="#8494a8"/><text x="799" y="764">C · F · G work over the bus</text>
+    <circle cx="984" cy="760" r="5" fill="#f0b45c"/><text x="995" y="764">H · optional add-on plugs into D</text>
   </g>
 </svg>
