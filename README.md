@@ -1,118 +1,120 @@
-# Agent-Backed Workspace — Knowledge Base & Reference Implementation
+**Русский** · [English](README.en.md)
 
-![Standards map](assets/standards-map.svg)
+# Воркспейс на агентах — база знаний и референсная реализация
 
-A field-tested knowledge base for running a Windows workspace where **multiple Claude Code sessions ("agents") work in parallel under one human owner** — coordinating with each other through a file-based bus, with **no human dispatcher in the loop**. It is both a KB (the `docs/`) and an **anonymized, working reference implementation** (the `scripts/`, `commands/`, and `remote-bridge/`) you can lift onto a fresh machine.
+![Карта стандартов](assets/standards-map.svg)
 
-This is for anyone who has outgrown a single Claude Code session and wants a durable pattern for a *team* of specialized peer-agents — a Tech Lead, a QA peer, DevOps — that pass work between themselves, survive `/compact` and restarts, and stay observable. Everything here comes from real practice; every identifier is a placeholder, so nothing leaks and everything is reusable.
+Проверенная на практике база знаний для организации Windows-воркспейса, в котором **несколько сессий Claude Code («агентов») работают параллельно под управлением одного человека-владельца** — координируясь друг с другом через файловую шину, **без человека-диспетчера в контуре**. Это одновременно и база знаний (`docs/`), и **обезличенная, рабочая референсная реализация** (`scripts/`, `commands/`, `remote-bridge/`), которую можно перенести на чистую машину как есть.
 
-> **This repo (`main`) is the multi-peer workspace knowledge base + reference implementation** — the standards a team of parallel Claude Code agents runs on.
+Материал рассчитан на тех, кому уже тесно в рамках одной сессии Claude Code и кто хочет устойчивый паттерн для *команды* специализированных агентов-пиров — Tech Lead, QA-пир, DevOps, — которые передают работу друг другу, переживают `/compact` и перезапуски и остаются наблюдаемыми. Всё здесь взято из реальной практики; каждый идентификатор — плейсхолдер, поэтому ничего не утекает и всё переиспользуемо.
 
----
-
-## How it fits together
-
-The pieces stack in a dependency spine — read top to bottom and each layer rests on the one above it:
-
-> **Foundation (A)** underpins everything → **Workspace Organization (C)** is the container → the **Pool Coordination Bus (D)** is the core coordination protocol → **Pool Lifecycle Tooling (E)** scaffolds, launches, and observes it → **Roles (F)** and **DevOps (G)** do their work *over* the bus → the **Skills System (B)** delivers all this knowledge to agents without bloating context → the **Remote Bridge (H)** is an optional remote onto the bus from your phone.
+> **Этот репозиторий (`main`) — база знаний и референсная реализация мульти-пир воркспейса**: стандарты, по которым работает команда параллельных агентов Claude Code.
 
 ---
 
-## What's inside
+## Как всё складывается вместе
 
-The knowledge base is organized into **9 standards blocks (A–I)**. Each links to its key docs.
+Компоненты выстраиваются в зависимостный хребет — читайте сверху вниз, каждый слой опирается на предыдущий:
 
-### A — Foundation: Environment & Safety
-The bedrock every session sits on: Windows/PowerShell gotchas, secret hygiene, global reliability guards (a hard block on catastrophic `rm`, a process-kill advisory, a malformed-output detector), and Claude Code environment setup.
+> **Foundation (A)** (Фундамент) лежит в основе всего → **Workspace Organization (C)** (Организация воркспейса) — это контейнер → **Pool Coordination Bus (D)** (Координационная шина пула) — ключевой протокол координации → **Pool Lifecycle Tooling (E)** (Инструменты жизненного цикла пула) разворачивает, запускает и наблюдает его → **Roles (F)** (Роли) и **DevOps (G)** делают свою работу *поверх* шины → **Skills System (B)** (Система скилов) доставляет все эти знания агентам, не раздувая контекст → **Remote Bridge (H)** (Удалённый мост) — опциональный удалённый доступ к шине с телефона.
+
+---
+
+## Что внутри
+
+База знаний разбита на **9 блоков стандартов (A–I)**. Каждый ведёт на свои ключевые документы.
+
+### A — Foundation: Environment & Safety (Фундамент: окружение и безопасность)
+Основа, на которой стоит каждая сессия: подводные камни Windows/PowerShell, гигиена секретов, глобальные защитные механизмы (жёсткая блокировка катастрофического `rm`, предупреждение при убийстве процессов, детектор искажённого вывода) и настройка окружения Claude Code.
 → [Windows / PowerShell Pitfalls](docs/windows-powershell-pitfalls.md) · [Handling Secrets](docs/handling-secrets.md) · [Safety Guards](docs/safety-guards.md) · [Claude Code Setup](docs/claude-code-setup.md)
 
-### B — Skills System
-How knowledge reaches agents *without* bloating their context: thin skill stubs plus a canon-injector (`ref.ps1`), the listing budget, and the discovery cascade.
+### B — Skills System (Система скилов)
+Как знания доходят до агентов, *не* раздувая их контекст: тонкие заглушки скилов плюс инжектор канона (`ref.ps1`), бюджет листинга и каскад дискаверинга.
 → [The Skills System](docs/the-skills-system.md)
 
-### C — Workspace Organization
-The container for everything: monorepo variants A/B, plain vs. pool mode, workspace and subproject anatomy, and bootstrap.
+### C — Workspace Organization (Организация воркспейса)
+Контейнер для всего остального: варианты монорепо A/B, plain- и pool-режим, анатомия воркспейса и подпроекта, бутстрап.
 → [Workspace Organization](docs/workspace-organization.md)
 
-### D — Pool Coordination Bus  *(the core)*
-The heart of the system: a **file-based maildir bus** over which N sessions coordinate with **no human dispatcher**. A message is an immutable file; an address is a folder. The delivery invariant is held by the *tool*, not by agent discipline.
+### D — Pool Coordination Bus (Координационная шина пула)  *(ядро)*
+Сердце системы: **файловая maildir-шина**, поверх которой N сессий координируются **без человека-диспетчера**. Сообщение — это неизменяемый файл; адрес — это папка. Инвариант доставки держит *инструмент*, а не дисциплина агентов.
 → [Pool Communication](docs/pool-communication.md) · [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) · [Pool Standard Tiers](docs/pool-standard-tiers.md) · [Lessons Learned](docs/lessons-learned.md)
 
-### E — Pool Lifecycle Tooling
-Scaffold → launch → observe. One command stands up a bus-native pool; an fzf picker launches it into Warp; a live board and watcher keep it visible.
+### E — Pool Lifecycle Tooling (Инструменты жизненного цикла пула)
+Развернуть → запустить → наблюдать. Одна команда поднимает bus-native пул; fzf-пикер запускает его в Warp; живой борд и вотчер держат его на виду.
 → [Pool Scaffolding](docs/pool-scaffolding.md) · [Pool Launcher & Warp](docs/pool-launcher-and-warp.md) · [Board & Watcher](docs/board-and-watcher.md) · [Intra-Project Pool Recipe](docs/intra-project-pool-recipe.md)
 
-### F — Roles & Working Style
-The one active agent model (subagent-driven Tech Lead), the QA peer, and the standing working principles that keep agents autonomous and right-sized.
+### F — Roles & Working Style (Роли и стиль работы)
+Модель единственного активного агента (subagent-driven Tech Lead), QA-пир и стоячие принципы работы, которые держат агентов автономными и соразмерными задаче.
 → [Tech Lead Mode](docs/tech-lead-mode.md) · [QA Role](docs/qa-role.md) · [Working Principles](docs/working-principles.md) · [Right-Sizing & Artifacts](docs/right-sizing-and-artifacts.md)
 
-### G — DevOps & Self-Healing
-A two-layer DevOps model (server-wide orchestrator + per-monorepo DevOps) and a closed-loop self-healing pipeline for production services.
+### G — DevOps & Self-Healing (DevOps и самовосстановление)
+Двухслойная модель DevOps (server-wide оркестратор + per-monorepo DevOps) и замкнутый контур самовосстановления для production-сервисов.
 → [DevOps Two-Layer Model](docs/devops-two-layer.md) · [Self-Healing Pipeline](docs/sre-self-healing-pipeline.md)
 
-### H — Remote Bridge  *(optional add-on)*
-Drive a live session or pool **from your phone via Telegram** — text or voice, behind NAT, no open ports. One engine copy per workspace; instances are wired by config. The only outbound channel is allowlisted; only the owner can write.
+### H — Remote Bridge (Удалённый мост)  *(опциональное дополнение)*
+Управляйте живой сессией или пулом **с телефона через Telegram** — текстом или голосом, из-за NAT, без открытых портов. По одной копии движка на воркспейс; инстансы разводятся конфигом. Единственный исходящий канал — из allowlist; писать может только владелец.
 → [remote-bridge/](remote-bridge/)
 
-### I — Shutdown & Context Hygiene
-The other half of the lifecycle after *launch & observe* (E): winding a pool down cleanly and keeping context fresh. An external controller runs **handoff → compact → kill** (a *light close* skips both for a near-empty session), reads a per-session context metric, and the picker doubles as the **pult** — one control surface to launch, shut down, or open the board. The direction of travel: agents that self-clean instead of a human babysitting `/compact`.
+### I — Shutdown & Context Hygiene (Завершение и гигиена контекста)
+Вторая половина жизненного цикла после *запуска и наблюдения* (E): аккуратное сворачивание пула и поддержание свежести контекста. Внешний контроллер выполняет **handoff → compact → kill** (*лёгкое закрытие* пропускает оба шага для почти пустой сессии), читает метрику контекста по каждой сессии, а пикер заодно служит **пультом** — единой панелью управления, чтобы запустить, погасить или открыть борд. Направление движения: агенты, которые сами себя чистят, вместо человека, нянчащего `/compact`.
 → [Pool Shutdown & Context Refresh](docs/pool-shutdown-and-context-refresh.md)
 
-### Top-level directories
+### Каталоги верхнего уровня
 
-| Directory | What it holds |
+| Каталог | Что содержит |
 |-----------|---------------|
-| [`docs/`](docs/) | The knowledge base — the 9 blocks above. Start at [`docs/README.md`](docs/README.md). |
-| [`scripts/`](scripts/) | Anonymized reference PowerShell: the bus core `pool.ps1`, scaffolders `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, launcher/pult `launch-pool.ps1`, shutdown controller `pool-shutdown.ps1`, guards `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, canon-injector `ref.ps1`, board/notifier, and templates. |
-| [`commands/`](commands/) | Reusable Claude Code slash-commands (prompt templates for `~/.claude/commands/`), e.g. [`handoff-myself`](commands/handoff-myself.md). |
-| [`remote-bridge/`](remote-bridge/) | The Telegram "pult" — a working long-polling bridge engine plus a "connect your own bot" guide. Secrets live outside the repo. |
+| [`docs/`](docs/) | База знаний — 9 блоков выше. Начните с [`docs/README.md`](docs/README.md). |
+| [`scripts/`](scripts/) | Обезличенный референсный PowerShell: ядро шины `pool.ps1`, скаффолдеры `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, лаунчер/пульт `launch-pool.ps1`, контроллер завершения `pool-shutdown.ps1`, защитные механизмы `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, инжектор канона `ref.ps1`, борд/нотификатор и шаблоны. |
+| [`commands/`](commands/) | Переиспользуемые slash-команды Claude Code (шаблоны промптов для `~/.claude/commands/`), например [`handoff-myself`](commands/handoff-myself.md). |
+| [`remote-bridge/`](remote-bridge/) | Telegram-«пульт» — рабочий движок моста на long-polling плюс руководство «подключи своего бота». Секреты живут вне репозитория. |
 
 ---
 
-## Prerequisites
+## Предварительные требования
 
-Install these on a clean Windows machine before standing up the workspace:
+Установите это на чистую Windows-машину, прежде чем поднимать воркспейс:
 
-| Tool | Why |
+| Инструмент | Зачем |
 |------|-----|
-| **Node.js** (LTS) | Runtime for Claude Code. Also add `node.exe` to your antivirus trust list — see [Windows Pitfalls](docs/windows-powershell-pitfalls.md). |
-| **Claude Code CLI** | The agent runtime; install and authenticate. |
-| **Git for Windows** | Provides the `bash` the status line depends on. |
-| **Warp** (terminal) | Pools launch via a generated Warp tab-config; without it, roles start from wrapper `.bat` files directly. |
-| **fzf** (`fzf.exe`) | Powers the terminal pool picker. |
-| **jq** | Used by the status-line hook. |
+| **Node.js** (LTS) | Рантайм для Claude Code. Также добавьте `node.exe` в доверенные у антивируса — см. [Windows Pitfalls](docs/windows-powershell-pitfalls.md). |
+| **Claude Code CLI** | Рантайм агента; установить и авторизоваться. |
+| **Git for Windows** | Даёт `bash`, от которого зависит статус-лайн. |
+| **Warp** (терминал) | Пулы запускаются через сгенерированный Warp tab-config; без него роли стартуют напрямую из wrapper-файлов `.bat`. |
+| **fzf** (`fzf.exe`) | Обеспечивает терминальный пикер пула. |
+| **jq** | Используется хуком статус-лайна. |
 
 ---
 
-## Reading paths
+## Маршруты чтения
 
-Three short guided routes. The full index — with a one-line description of every document — lives in **[`docs/README.md`](docs/README.md)**.
+Три коротких проводника. Полный индекс — с однострочным описанием каждого документа — лежит в **[`docs/README.md`](docs/README.md)**.
 
-**(a) Just browsing** — understand the model:
-1. [Workspace Organization](docs/workspace-organization.md) — the overall shape.
-2. [The Skills System](docs/the-skills-system.md) — how knowledge reaches agents.
-3. [Pool Communication](docs/pool-communication.md) — how several agents coordinate.
-4. [Tech Lead Mode](docs/tech-lead-mode.md) — how one agent works.
+**(a) Просто осмотреться** — понять модель:
+1. [Workspace Organization](docs/workspace-organization.md) — общая форма.
+2. [The Skills System](docs/the-skills-system.md) — как знания доходят до агентов.
+3. [Pool Communication](docs/pool-communication.md) — как несколько агентов координируются.
+4. [Tech Lead Mode](docs/tech-lead-mode.md) — как работает один агент.
 
-**(b) Bootstrapping a new machine** — stand it up from zero:
-1. [Claude Code Setup](docs/claude-code-setup.md) — environment, memory, sessions.
-2. [Safety Guards](docs/safety-guards.md) + [Windows Pitfalls](docs/windows-powershell-pitfalls.md) — guards and Windows gotchas.
-3. [Workspace Organization](docs/workspace-organization.md) — bootstrap the workspace itself.
-4. [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) + [`scripts/`](scripts/) — assemble the pool infra.
-5. [Pool Scaffolding](docs/pool-scaffolding.md), then [Pool Launcher & Warp](docs/pool-launcher-and-warp.md) + [Board & Watcher](docs/board-and-watcher.md) — launch and observe.
+**(b) Бутстрап новой машины** — поднять с нуля:
+1. [Claude Code Setup](docs/claude-code-setup.md) — окружение, память, сессии.
+2. [Safety Guards](docs/safety-guards.md) + [Windows Pitfalls](docs/windows-powershell-pitfalls.md) — защитные механизмы и подводные камни Windows.
+3. [Workspace Organization](docs/workspace-organization.md) — бутстрап самого воркспейса.
+4. [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) + [`scripts/`](scripts/) — собрать инфру пула.
+5. [Pool Scaffolding](docs/pool-scaffolding.md), затем [Pool Launcher & Warp](docs/pool-launcher-and-warp.md) + [Board & Watcher](docs/board-and-watcher.md) — запустить и наблюдать.
 
-**(c) Debugging a prod incident** — find the loop and the layer:
-1. [Self-Healing Pipeline](docs/sre-self-healing-pipeline.md) — the closed loop.
-2. [DevOps Two-Layer Model](docs/devops-two-layer.md) — which layer does the fix.
-3. The specific per-monorepo runbook (lives with the project, not in this KB).
+**(c) Разбор production-инцидента** — найти контур и слой:
+1. [Self-Healing Pipeline](docs/sre-self-healing-pipeline.md) — замкнутый контур.
+2. [DevOps Two-Layer Model](docs/devops-two-layer.md) — какой слой выполняет починку.
+3. Конкретный per-monorepo runbook (живёт вместе с проектом, а не в этой базе знаний).
 
 ---
 
-## Project structure convention
+## Соглашение о структуре проекта
 
-Every workspace and subproject follows the same numbered layout. This is the short version — see [Workspace Organization](docs/workspace-organization.md) for the full anatomy, both monorepo variants, and bootstrap steps.
+Каждый воркспейс и подпроект следует одной и той же нумерованной раскладке. Это краткая версия — полную анатомию, оба варианта монорепо и шаги бутстрапа см. в [Workspace Organization](docs/workspace-organization.md).
 
-**Numbered top-level folders** (subproject):
+**Нумерованные папки верхнего уровня** (подпроект):
 
 ```
 00_docs/            # architecture/ | standards/ | specs/ | backlog.md
@@ -122,25 +124,25 @@ Every workspace and subproject follows the same numbered layout. This is the sho
 04_logs/            # gitignored
 ```
 
-**Dot-folders:** `.agents/` (agent setup), `.claude/` (Claude Code settings & hooks), `.worktrees/` (git worktrees). In pool mode, the bus lives in `.bus/` (maildir, gitignored, lazily created).
+**Dot-папки:** `.agents/` (настройка агентов), `.claude/` (настройки и хуки Claude Code), `.worktrees/` (git worktrees). В pool-режиме шина живёт в `.bus/` (maildir, gitignored, создаётся лениво).
 
-**Naming rules:**
+**Правила именования:**
 
-| Thing | Convention |
+| Что | Соглашение |
 |-------|-----------|
-| Task folders | `NNN_short_name` (three-digit prefix) |
-| File iterations | suffix `_NN` — `task_brief_01.md`, then `_02` on rework; **never overwrite** |
-| ADRs | `decision_NNN_*.md` |
-| Handoff / scratch files | prefixed with `_` — `_handoff_*.md`, `_questions_to_user.md` |
+| Папки задач | `NNN_short_name` (трёхзначный префикс) |
+| Итерации файлов | суффикс `_NN` — `task_brief_01.md`, затем `_02` при переработке; **никогда не перезаписывать** |
+| ADR | `decision_NNN_*.md` |
+| Handoff / черновые файлы | с префиксом `_` — `_handoff_*.md`, `_questions_to_user.md` |
 
-**The three doc files (all auto-loaded by Claude Code, different jobs):**
+**Три doc-файла (все автоматически подгружаются Claude Code, у каждого своя задача):**
 
-- **`AGENTS.md`** — describes the workspace for a developer and for an agent in plain mode: what it is, which subprojects, how they relate. Grows slowly.
-- **`README.md`** — human-facing overview of the project.
-- **`CLAUDE.md`** — the operational routing entry point: "where to go and what to read before answering." Required in pool mode; optional (or a thin pointer to `AGENTS.md`) in plain mode.
+- **`AGENTS.md`** — описывает воркспейс для разработчика и для агента в plain-режиме: что это, какие подпроекты, как они связаны. Растёт медленно.
+- **`README.md`** — обзор проекта для человека.
+- **`CLAUDE.md`** — операционная точка входа для роутинга: «куда идти и что прочитать перед ответом». Обязателен в pool-режиме; опционален (или тонкий указатель на `AGENTS.md`) в plain-режиме.
 
 ---
 
-## Anonymization
+## Обезличивание
 
-Everything here is a reference, not a run-out-of-the-box package. **All identifiers are placeholders** — `<workspace-root>`, `<user-home>`, `<pool-name>`, `<role>-<scope>`, `<vps-ip>`. No real hosts, paths, subproject names, or secrets. Before using the scripts, do a global find/replace of `<workspace-root>` with your actual path (see [`scripts/README.md`](scripts/README.md)). Examples drawn from live practice are labeled as such.
+Всё здесь — референс, а не готовый к запуску пакет. **Все идентификаторы — плейсхолдеры**: `<workspace-root>`, `<user-home>`, `<pool-name>`, `<role>-<scope>`, `<vps-ip>`. Никаких реальных хостов, путей, имён подпроектов или секретов. Прежде чем использовать скрипты, сделайте глобальную замену `<workspace-root>` на свой фактический путь (см. [`scripts/README.md`](scripts/README.md)). Примеры, взятые из живой практики, помечены как таковые.
