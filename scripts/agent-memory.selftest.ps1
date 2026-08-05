@@ -107,8 +107,21 @@ Check 'no index -> percent stays 0' ($st.Pct -eq 0)
 $st = Get-AgentMemoryStats -RoleDir $roleDir
 Check 'index detected' ($st.HasIndex)
 Check 'entries counted without the index itself' ($st.Entries -eq 1) "got $($st.Entries)"
-Check 'binding ceiling named' ($st.Bound -eq 'lines' -or $st.Bound -eq 'bytes')
+Check 'binding ceiling is the LINE one for a short ascii index' ($st.Bound -eq 'lines') "got $($st.Bound) at $($st.Pct)%"
 Check 'last write filled' ($null -ne $st.LastWrite)
+
+# Cyrillic fixture: the engine counts CHARACTERS, not bytes (measured live - its own warning prints
+# "29.4KB (limit: 24.4KB)" where 29.4KB == chars/1024). Every Cyrillic char is 2 bytes in UTF-8, so a
+# byte-based formula reports 144% here and picks Bound=bytes, while the truth is 72% and Bound=chars.
+# Built from code points so this source file stays ASCII.
+$ruLine = -join (0..299 | ForEach-Object { [char](0x430 + ($_ % 32)) })
+$ruIdx  = ($ruLine + [char]13 + [char]10) * 60
+[System.IO.File]::WriteAllText((Join-Path $roleDir 'MEMORY.md'), $ruIdx)
+$st = Get-AgentMemoryStats -RoleDir $roleDir
+Check 'cyrillic index: chars counted, not bytes' ($st.IndexChars -eq 18120) "got $($st.IndexChars)"
+Check 'cyrillic index: char ceiling binds, not the byte one' ($st.Bound -eq 'chars') "got $($st.Bound)"
+Check 'cyrillic index: percent is 72, not the 144 bytes would give' ($st.Pct -eq 72) "got $($st.Pct)"
+Check 'trailing newline adds no phantom line' ($st.IndexLines -eq 60) "got $($st.IndexLines)"
 $st = Get-AgentMemoryStats -RoleDir (Join-Path $sandbox '.memory\nobody')
 Check 'missing store: Exists=false, no throw' (-not $st.Exists)
 Check 'stats create nothing on disk' (-not (Test-Path (Join-Path $sandbox '.memory\nobody')))

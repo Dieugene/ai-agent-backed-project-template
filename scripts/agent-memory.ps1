@@ -160,7 +160,7 @@ function Get-AgentMemoryStats {
     # percentage cannot express it: nothing written there reaches the context automatically.
     $s = [PSCustomObject]@{
         Exists = $false; HasIndex = $false; Entries = 0
-        IndexLines = 0; IndexBytes = 0; Pct = 0; Bound = ''; Unknown = $false; LastWrite = $null
+        IndexLines = 0; IndexChars = 0; Pct = 0; Bound = ''; Unknown = $false; LastWrite = $null
     }
     try {
         $di = New-Object System.IO.DirectoryInfo($RoleDir)
@@ -178,13 +178,18 @@ function Get-AgentMemoryStats {
         if ($idx) {
             $s.HasIndex = $true
             $t = [System.IO.File]::ReadAllText($idx.FullName)
-            # Engine ceiling: 200 lines OR 25000 bytes, whichever comes first. Report the binding one,
-            # otherwise "90 lines, 86%" reads as a contradiction (measured on the launcher store).
-            $s.IndexLines = @($t -split "`r?`n").Count
-            $s.IndexBytes = [System.Text.Encoding]::UTF8.GetByteCount($t)
+            # Engine ceiling, measured live: 200 lines OR 25000 CHARACTERS - not bytes. The engine
+            # prints its own warning as "MEMORY.md is 29.4KB (limit: 24.4KB)", where 29.4KB == chars/1024
+            # (that same probe file was 48.3KB on disk), so Cyrillic costs nothing extra here.
+            # Counting BYTES overstated every Cyrillic store by ~1.55x: one index read 90% at a real 58%.
+            # Report the binding ceiling, otherwise "90 lines, 86%" reads as a contradiction.
+            # Trailing newline must NOT add a phantom line: the engine counted a 320-line probe as 320.
+            $trimmed = $t.TrimEnd([char]13, [char]10)
+            $s.IndexLines = if ($trimmed.Length) { @($trimmed -split "`r?`n").Count } else { 0 }
+            $s.IndexChars = $t.Length
             $pl = [math]::Round(100 * $s.IndexLines / 200)
-            $pb = [math]::Round(100 * $s.IndexBytes / 25000)
-            if ($pl -ge $pb) { $s.Pct = $pl; $s.Bound = 'lines' } else { $s.Pct = $pb; $s.Bound = 'bytes' }
+            $pc = [math]::Round(100 * $s.IndexChars / 25000)
+            if ($pl -ge $pc) { $s.Pct = $pl; $s.Bound = 'lines' } else { $s.Pct = $pc; $s.Bound = 'chars' }
         }
     } catch {
         # The engine rewrites MEMORY.md and the PreCompact audit runs git in the same directory, so a

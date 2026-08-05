@@ -6,7 +6,7 @@
 #   powershell -File memory-check.ps1 -Dir "<путь к .memory\<роль>>" [-Quiet]
 #
 # Проверки и их основания:
-#   1. Потолок индекса        - движок обрезает MEMORY.md на 200 строках / 25000 байтах, с предупреждением.
+#   1. Потолок индекса        - движок обрезает MEMORY.md на 200 строках / 25000 знаках, с предупреждением.
 #   2. Даты в теле записи     - лента дат значит, что записали хронику, а не знание; хроника живёт в задаче.
 #   3. Хронологическое имя    - файл вида 2026-07-31.md не находится по предмету, а только по памяти о дне.
 #   3a. Ссылка на саму себя   - след слияния: у поглощённой части осталась строка «Связано», вести ей некуда.
@@ -32,15 +32,15 @@ $findings = New-Object System.Collections.Generic.List[string]
 function Note([string]$s) { $findings.Add($s) | Out-Null }
 
 # ---- 1. индекс: потолок --------------------------------------------------
-$idxLines = @(); $idxBytes = 0
+$idxLines = @(); $idxChars = 0
 if (Test-Path -LiteralPath $indexPath) {
     $idxText = [System.IO.File]::ReadAllText($indexPath)
-    $idxBytes = [System.Text.Encoding]::UTF8.GetByteCount($idxText)
-    $idxLines = @($idxText -split "`r?`n")
+    $idxChars = $idxText.Length      # ENGINE COUNTS CHARS, NOT BYTES (its warning prints 29.4KB == chars/1024)
+    $idxLines = @($idxText.TrimEnd([char]13, [char]10) -split "`r?`n")
     $pctLines = [math]::Round(100 * $idxLines.Count / 200)
-    $pctBytes = [math]::Round(100 * $idxBytes / 25000)
-    if ($pctLines -ge 80 -or $pctBytes -ge 80) {
-        Note "ИНДЕКС близок к потолку: $($idxLines.Count)/200 строк ($pctLines%), $idxBytes/25000 байт ($pctBytes%). Переполнение движок обрежет."
+    $pctChars = [math]::Round(100 * $idxChars / 25000)
+    if ($pctLines -ge 80 -or $pctChars -ge 80) {
+        Note "ИНДЕКС близок к потолку: $($idxLines.Count)/200 строк ($pctLines%), $idxChars/25000 знаков ($pctChars%). Переполнение движок обрежет."
     }
     $long = @($idxLines | Where-Object { $_.Length -gt 200 })
     if ($long.Count) { Note "ИНДЕКС: строк длиннее 200 знаков - $($long.Count). Строка индекса несёт следствие, подробности - в теле." }
@@ -121,7 +121,7 @@ foreach ($b in $bodies) {
 # ---- отчёт ---------------------------------------------------------------
 if (-not $Quiet) {
     Write-Host "память: $Dir" -ForegroundColor Cyan
-    Write-Host ("записей: {0}   индекс: {1} строк / {2} байт" -f $bodies.Count, $idxLines.Count, $idxBytes)
+    Write-Host ("записей: {0}   индекс: {1} строк / {2} знаков" -f $bodies.Count, $idxLines.Count, $idxChars)
 }
 if ($findings.Count -eq 0) { Write-Host "структурных замечаний нет" -ForegroundColor Green }
 else { foreach ($f in $findings) { Write-Host "  - $f" -ForegroundColor Yellow } }
