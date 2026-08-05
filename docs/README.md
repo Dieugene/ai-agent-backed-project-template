@@ -29,6 +29,13 @@
 | [Safety Guards](safety-guards.md) | Глобальные hook'и надёжности: жёсткий блок катастрофического `rm` (PreToolUse, работает под `--dangerously-skip-permissions`), advisory на kill-по-имени (чтобы не бить чужие вотчеры), детектор malformed-вывода (Stop). Регистрация и self-test. |
 | [Claude Code Setup](claude-code-setup.md) | Effort-уровни и персистентность; статус-лайн; постоянные именованные сессии (compaction); файловая система памяти; изоляция браузера по агентам. |
 | [The Skills System](the-skills-system.md) | Механика скилов; listing budget (1%); тонкие стабы + вынос канона в `.references/` + инжектор `ref.ps1`; каскад дискаверинга и перенос cwd; meta-skill (Iron Law). |
+| [Self-Testing and False Greens](self-testing-and-false-greens.md) | Почему «тесты зелёные» ничего не доказывает: ложное зелёное против ложной тревоги, мутация как единственная проверка теста, тест, рушащийся от собственной раскатки, счёт как способ найти источник. |
+| [Cross-Platform Port](cross-platform-port.md) | Что ломается при переносе на Linux (блокировки, разделители путей, идентичность процесса) и **матрица переносимости артефактов**: что едет как есть, что требует серверной версии, что не едет. |
+
+### Память агента
+| Документ | О чём |
+|----------|-------|
+| [Agent Long-Term Memory](agent-long-term-memory.md) | Своя долговременная память на роль: каталог записей вместо растущего handoff-файла, индекс как интерфейс извлечения, впрыск точки входа после сжатия, что доезжает в контекст (замерено), команда сверки, отвергнутые варианты с цифрами. |
 
 ### Организация workspace
 | Документ | О чём |
@@ -77,6 +84,7 @@
 
 ### Рабочий код
 → [`../scripts/`](../scripts/) — референс-реализация всей инфраструктуры + [инструкция установки](../scripts/README.md).
+→ [`../lean-skills/`](../lean-skills/) — рабочий минимум скилов (четыре вместо четырнадцати), без хуков; постоянный расход контекста снижен с ~5.3 КБ до ~0.7 КБ. С замером использования, на котором построен отбор.
 
 ## С чего читать
 
@@ -94,7 +102,13 @@
 5. [Pool Scaffolding](pool-scaffolding.md) — поднять пул одной командой.
 6. [Pool Launcher & Warp](pool-launcher-and-warp.md) + [Board and Watcher](board-and-watcher.md) — запуск и мониторинг.
 7. [The Skills System](the-skills-system.md) — раздать знания через скилы.
-8. [Lessons Learned](lessons-learned.md) — что не повторять.
+8. [Agent Long-Term Memory](agent-long-term-memory.md) — включить память ролей до того, как накопится первый handoff-файл: перенос со «старой схемы» дороже, чем сразу правильный старт.
+9. [Lessons Learned](lessons-learned.md) — что не повторять.
+
+**Если переносите пространство на Linux-сервер:**
+1. [Cross-Platform Port](cross-platform-port.md) — классы отказов и матрица переносимости (§4).
+2. [Self-Testing and False Greens](self-testing-and-false-greens.md) — почему переносить надо начинать с того, **чем** проверяют.
+3. [Agent Long-Term Memory](agent-long-term-memory.md) §6 — файл-флаг, без которого память молча не включится.
 
 **Если разбираете production-инцидент:**
 1. [Self-Healing Pipeline](sre-self-healing-pipeline.md) — общий контур.

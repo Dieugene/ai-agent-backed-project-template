@@ -16,21 +16,21 @@ This is for anyone who has outgrown a single Claude Code session and wants a dur
 
 The pieces stack in a dependency spine — read top to bottom and each layer rests on the one above it:
 
-> **Foundation (A)** underpins everything → **Workspace Organization (C)** is the container → the **Pool Coordination Bus (D)** is the core coordination protocol → **Pool Lifecycle Tooling (E)** scaffolds, launches, and observes it → **Roles (F)** and **DevOps (G)** do their work *over* the bus → the **Skills System (B)** delivers all this knowledge to agents without bloating context → the **Remote Bridge (H)** is an optional remote onto the bus from your phone.
+> **Foundation (A)** underpins everything → **Workspace Organization (C)** is the container → the **Pool Coordination Bus (D)** is the core coordination protocol → **Pool Lifecycle Tooling (E)** scaffolds, launches, and observes it → **Roles (F)** and **DevOps (G)** do their work *over* the bus → the **Skills System (B)** delivers all this knowledge to agents without bloating context → **Shutdown & Context Hygiene (I)** winds the pool down and keeps context fresh, while **Agent Long-Term Memory (J)** owns whatever has to survive that wind-down → the **Remote Bridge (H)** is an optional remote onto the bus from your phone.
 
 ---
 
 ## What's inside
 
-The knowledge base is organized into **9 standards blocks (A–I)**. Each links to its key docs.
+The knowledge base is organized into **10 standards blocks (A–J)**. Each links to its key docs.
 
 ### A — Foundation: Environment & Safety
 The bedrock every session sits on: Windows/PowerShell gotchas, secret hygiene, global reliability guards (a hard block on catastrophic `rm`, a process-kill advisory, a malformed-output detector), and Claude Code environment setup.
-→ [Windows / PowerShell Pitfalls](docs/windows-powershell-pitfalls.md) · [Handling Secrets](docs/handling-secrets.md) · [Safety Guards](docs/safety-guards.md) · [Claude Code Setup](docs/claude-code-setup.md)
+→ [Windows / PowerShell Pitfalls](docs/windows-powershell-pitfalls.md) · [Handling Secrets](docs/handling-secrets.md) · [Safety Guards](docs/safety-guards.md) · [Claude Code Setup](docs/claude-code-setup.md) · [Self-Testing & False Greens](docs/self-testing-and-false-greens.md) · [Cross-Platform Port](docs/cross-platform-port.md)
 
 ### B — Skills System
-How knowledge reaches agents *without* bloating their context: thin skill stubs plus a canon-injector (`ref.ps1`), the listing budget, and the discovery cascade.
-→ [The Skills System](docs/the-skills-system.md)
+How knowledge reaches agents *without* bloating their context: thin skill stubs plus a canon-injector (`ref.ps1`), the listing budget, and the discovery cascade. Plus a **lean skill set** — four skills instead of fourteen, no hooks; standing context cost cut from ~5.3 KB to ~0.7 KB. The selection is based on a measurement: across 1288 sessions the large bundle was invoked 19 times.
+→ [The Skills System](docs/the-skills-system.md) · [lean-skills/](lean-skills/)
 
 ### C — Workspace Organization
 The container for everything: monorepo variants A/B, plain vs. pool mode, workspace and subproject anatomy, and bootstrap.
@@ -60,13 +60,18 @@ Drive a live session or pool **from your phone via Telegram** — text or voice,
 The other half of the lifecycle after *launch & observe* (E): winding a pool down cleanly and keeping context fresh. An external controller runs **handoff → compact → kill** (a *light close* skips both for a near-empty session), reads a per-session context metric, and the picker doubles as the **pult** — one control surface to launch, shut down, or open the board. The direction of travel: agents that self-clean instead of a human babysitting `/compact`.
 → [Pool Shutdown & Context Refresh](docs/pool-shutdown-and-context-refresh.md)
 
+### J — Agent Long-Term Memory
+What a role still knows **after** a context compaction and a restart. A private store per role instead of one shared pile keyed by working directory; a directory of entries instead of a single growing handoff file; the index the engine injects on its own, used as the retrieval interface; and an entry point re-injected right after compaction — **because a memory failure is invisible from the inside**: the summary looks complete, so nothing prompts the agent to open its memory. What actually reaches the context was measured, not inferred from the docs.
+→ [Agent Long-Term Memory](docs/agent-long-term-memory.md) · [`commands/handoff-myself`](commands/handoff-myself.md)
+
 ### Top-level directories
 
 | Directory | What it holds |
 |-----------|---------------|
-| [`docs/`](docs/) | The knowledge base — the 9 blocks above. Start at [`docs/README.md`](docs/README.md). |
+| [`docs/`](docs/) | The knowledge base — the 10 blocks above. Start at [`docs/README.md`](docs/README.md). |
 | [`scripts/`](scripts/) | Anonymized reference PowerShell: the bus core `pool.ps1`, scaffolders `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, launcher/pult `launch-pool.ps1`, shutdown controller `pool-shutdown.ps1`, guards `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, canon-injector `ref.ps1`, board/notifier, and templates. |
-| [`commands/`](commands/) | Reusable Claude Code slash-commands (prompt templates for `~/.claude/commands/`), e.g. [`handoff-myself`](commands/handoff-myself.md). |
+| [`commands/`](commands/) | Reusable Claude Code slash-commands (prompt templates for `~/.claude/commands/`), e.g. [`handoff-myself`](commands/handoff-myself.md) — the role's long-term-memory reconciliation pass. |
+| [`lean-skills/`](lean-skills/) | A lean skill set: four skills instead of a large bundle, installed as personal skills — **no plugin, no hooks**. Includes the usage measurement the selection is based on. |
 | [`remote-bridge/`](remote-bridge/) | The Telegram "pult" — a working long-polling bridge engine plus a "connect your own bot" guide. Secrets live outside the repo. |
 
 ---
@@ -107,6 +112,11 @@ Three short guided routes. The full index — with a one-line description of eve
 1. [Self-Healing Pipeline](docs/sre-self-healing-pipeline.md) — the closed loop.
 2. [DevOps Two-Layer Model](docs/devops-two-layer.md) — which layer does the fix.
 3. The specific per-monorepo runbook (lives with the project, not in this KB).
+
+**(d) Porting to a Linux server** — what travels and what has to be rewritten:
+1. [Cross-Platform Port](docs/cross-platform-port.md) — failure classes and the **portability matrix** (§4).
+2. [Self-Testing & False Greens](docs/self-testing-and-false-greens.md) — port the thing that *checks* first, or a green self-test on the server means nothing.
+3. [Agent Long-Term Memory](docs/agent-long-term-memory.md) §6 — the flag file without which role memory silently stays off.
 
 ---
 

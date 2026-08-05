@@ -32,6 +32,15 @@
 | `notify-pool-idle.ps1` | Тост «пул остановился» на переход active→0. | [board-and-watcher](../docs/board-and-watcher.md) |
 | `block-dangerous-rm.ps1` | Глобальный PreToolUse-hook против катастрофического рекурсивного rm. | [safety-guards](../docs/safety-guards.md) |
 | `templates/` | Шаблоны: wrapper пула, дворник личных todo, add-peer/. | [wrapper-and-hook-scripts](../docs/wrapper-and-hook-scripts.md) |
+| `agent-memory.ps1` | Своя долговременная память на роль: каталог + файл настроек для `claude --settings`, регистрация хуков сжатия. Дот-сорсится всеми путями запуска. | [agent-long-term-memory](../docs/agent-long-term-memory.md) |
+| `memory-audit.ps1` | Хук `PreCompact`: коммитит память в локальный git и печатает структурные замечания. | [agent-long-term-memory](../docs/agent-long-term-memory.md) |
+| `memory-inject.ps1` | Хук `SessionStart(compact)`: возвращает в контекст точку входа в память сразу после сжатия. | [agent-long-term-memory](../docs/agent-long-term-memory.md) |
+| `memory-check.ps1` | Структурные проверки одного хранилища: потолок индекса, записи без строки в индексе, битые ссылки, дубли. | [agent-long-term-memory](../docs/agent-long-term-memory.md) |
+| `memory-board.ps1` | Таблица памяти по ролям пула или по всему workspace. | [agent-long-term-memory](../docs/agent-long-term-memory.md) |
+| `agent-memory.selftest.ps1` | Самотест модуля памяти. Возвращает ненулевой код при провале. | [self-testing-and-false-greens](../docs/self-testing-and-false-greens.md) |
+| `selftest.ps1` | **Приёмочный гейт шины**: проверки ядра на обеих платформах, платформа печатается в сводке, код возврата честный. | [self-testing-and-false-greens](../docs/self-testing-and-false-greens.md), [cross-platform-port](../docs/cross-platform-port.md) |
+| `pool-manifest.ps1` | Чтение манифеста пула: пути, роли, живость; общий источник для пикера и доски. | [pool-launcher-and-warp](../docs/pool-launcher-and-warp.md) |
+| `notify-malformed.ps1` | Тост детектора искажённого вывода. ASCII-only без BOM **намеренно**. | [safety-guards](../docs/safety-guards.md) |
 
 ## Установка (минимум для одного пула)
 
@@ -50,5 +59,17 @@
 ## Кодировки (Windows / PowerShell 5.1)
 
 `.ps1` с кириллицей должны быть **UTF-8 с BOM**, иначе PowerShell 5.1 читает кириллицу как
-cp1251 (mojibake). ASCII-only скрипты (`pool.ps1`, `ref.ps1`, `block-dangerous-rm.ps1`) — без
-BOM намеренно. Правки байт-безопасно. Подробности — [windows-powershell-pitfalls](../docs/windows-powershell-pitfalls.md).
+cp1251 (mojibake). ASCII-only скрипты (`ref.ps1`, `block-dangerous-rm.ps1`, `notify-malformed.ps1`,
+`selftest.ps1`) — без BOM **намеренно**, и в шапке каждого это сказано.
+
+⚠️ **Соседние файлы живут в разных режимах, и это не небрежность.** Перед правкой смотреть шапку:
+добавление BOM в файл, объявленный ASCII-only, превратит объявление в ложь, а добавление кириллицы
+в такой файл даст мохибаке. `selftest.ps1` содержит проверку с литералами кириллического диапазона —
+там BOM изменил бы смысл проверки.
+
+**Правки — байт-безопасно.** Читать `ReadAllBytes`, декодировать, заменять, писать `WriteAllBytes`;
+после правки убеждаться, что BOM **ровно один** (чтение байтов с последующей записью через
+кодировку с BOM даёт **два**, файл при этом парсится, а первая строка исполняется как команда).
+
+Подробности — [windows-powershell-pitfalls](../docs/windows-powershell-pitfalls.md),
+[cross-platform-port](../docs/cross-platform-port.md).

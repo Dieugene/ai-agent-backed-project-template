@@ -3,7 +3,7 @@
 
   Generates the full skeleton of a standalone monorepo + agent pool wired to the
   shared maildir pool bus (<workspace-root>\.launcher\pool-bus\pool.ps1). Output shape
-  mirrors the validated reference pool `content`:
+  mirrors the validated reference pool `<pool-b>`:
 
     <root>/
       .bus/                              (lazy maildir; created empty)
@@ -33,14 +33,14 @@
     # Rich (recommended): a UTF-8 JSON spec carries Cyrillic role labels cleanly.
     powershell -File new-pool.ps1 -Spec my-pool.json
     # Quick inline (ASCII owners; labels become TODO placeholders):
-    powershell -File new-pool.ps1 -Name content -Roles methodist,author,critic -Lead methodist
+    powershell -File new-pool.ps1 -Name <pool-b> -Roles methodist,author,critic -Lead methodist
     # Dry run:
     powershell -File new-pool.ps1 -Spec my-pool.json -WhatIf
 
   SPEC JSON
     {
-      "name": "content",                 (required; kebab-case; = workspace folder)
-      "pool": "content-pool",            (optional; default "<name>-pool")
+      "name": "<pool-b>",                 (required; kebab-case; = workspace folder)
+      "pool": "<pool-b>-pool",            (optional; default "<name>-pool")
       "title": "учебные задания на каждый день",(optional; one-liner for CLAUDE.md/README)
       "displaySuffix": "Daily",                (optional; default PascalCase of name's 1st segment)
       "lead": "methodist",                     (optional; default first role)
@@ -65,6 +65,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:U8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+# ---- канон параметров запуска для новых пулов -----------------------------
+# Модель пиним ВСЕМ ролям: без явного --model сессия при `--resume` восстанавливается на своей
+# старой модели, а глобальный /model владельца протекает во все пулы разом.
+# Менять постфактум — .launcher\pool-bus\set-pool-runtime.ps1 (там те же значения).
+$PoolModel      = 'claude-opus-5[1m]'
+$PoolLeadEffort = 'high'
+$PoolEffort     = 'medium'
 
 # ---- resolve spec --------------------------------------------------------
 $roleList = @()   # array of [pscustomobject]@{ owner=..; label=..; lead=$bool }
@@ -132,7 +140,7 @@ $boardCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-roo
 # for live sessions that predate skill discovery.
 $COORD = @'
 ### Координация с соседями — через `pool` (НЕ через Tasks API)
-Задача соседу / ответ / отчёт / доска — командой `pool` (maildir-шина), НЕ `TaskCreate`/`TaskUpdate`. Команды и правила — скил **`coordinating-on-the-pool-bus`**; онбординг/вотчер/handoff — скил **`operating-in-a-pool`**. Прямой доступ без скилов: `& "<workspace-root>\.references\ref.ps1" pool-coordination`. Крупные материалы — файлом, в сообщении — ссылка на путь. Личные todo — `TaskCreate(metadata={kind:"personal"})`.
+Задача соседу / ответ / отчёт / доска — командой `pool` (maildir-шина), НЕ `TaskCreate`/`TaskUpdate`. Команды и правила — скил **`coordinating-on-the-pool-bus`**; онбординг/вотчер/выход сессии — скил **`operating-in-a-pool`**. Прямой доступ без скилов: `& "<workspace-root>\.references\ref.ps1" pool-coordination`. Крупные материалы — файлом, в сообщении — ссылка на путь. Личные todo — `TaskCreate(metadata={kind:"personal"})`.
 '@
 
 # ---- file bodies (single-quoted here-strings + token replace) -----------
@@ -216,6 +224,9 @@ $T_gitignore = @'
 
 # Pool bus (maildir coordination state, owned by pool.ps1; not source)
 .bus/
+# Agent long-term memory: local only, never leaves this machine
+# (each role keeps its own git repo inside .memory\<role>\)
+.memory/
 
 # Standard
 __pycache__/
@@ -235,7 +246,8 @@ $T_poolLaunch = @'
 # POOL_BUS_ROOT) are inherited into the spawned `claude` process = pool mode.
 
 param(
-    [string]$Effort = '',   # xhigh for pool leads; empty = inherit global effortLevel (flag, not env var)
+    [string]$Effort = '',   # high for pool leads, medium for the rest; empty = inherit global effortLevel
+    [string]$Model = '',    # empty = inherit client default model
     [Parameter(Mandatory)][string]$SessionTitle,
     [string]$ProjectKey = '__PROJECTKEY__',
     # Optional UTF-8 file whose contents are submitted as the session's first prompt
@@ -282,18 +294,30 @@ if ($InitialPromptFile -and (Test-Path $InitialPromptFile)) {
 # Stop-hook watcher arm-gate opt-in: watcher roles pass -InitialPromptFile; watcherless (devops/serverside) do not.
 if ($InitialPromptFile) { $env:POOL_WATCHER = '1' }
 
+$modelArgs = if ($Model) { @('--model', $Model) } else { @() }
 $effortArgs = if ($Effort) { @('--effort', $Effort) } else { @() }
+
+# Role-private auto-memory: one store per AGENT_OWNER instead of one shared per-cwd pile.
+# Module lives in one place for the whole workspace (same model as pool.ps1).
+$memoryArgs = @()
+$agentMemoryModule = '<workspace-root>\.launcher\pool-bus\agent-memory.ps1'
+if (Test-Path $agentMemoryModule) {
+    . $agentMemoryModule
+    $memoryArgs = Get-AgentMemoryArgs
+} else {
+    Write-Host "[pool-launch] WARNING: $agentMemoryModule not found - this role starts with SHARED memory."
+}
 
 $sessionId = Find-SessionIdByTitle -Title $SessionTitle -Dir $projectDir
 
 if ($sessionId) {
     Write-Host "[pool-launch] Resuming '$SessionTitle' (session $sessionId)"
-    if ($initPrompt) { & claude --dangerously-skip-permissions @effortArgs --resume $sessionId $initPrompt }
-    else             { & claude --dangerously-skip-permissions @effortArgs --resume $sessionId }
+    if ($initPrompt) { & claude --dangerously-skip-permissions @modelArgs @effortArgs @memoryArgs --resume $sessionId $initPrompt }
+    else             { & claude --dangerously-skip-permissions @modelArgs @effortArgs @memoryArgs --resume $sessionId }
 } else {
     Write-Host "[pool-launch] No prior session '$SessionTitle' found - starting fresh."
-    if ($initPrompt) { & claude --dangerously-skip-permissions @effortArgs --name $SessionTitle $initPrompt }
-    else             { & claude --dangerously-skip-permissions @effortArgs --name $SessionTitle }
+    if ($initPrompt) { & claude --dangerously-skip-permissions @modelArgs @effortArgs @memoryArgs --name $SessionTitle $initPrompt }
+    else             { & claude --dangerously-skip-permissions @modelArgs @effortArgs @memoryArgs --name $SessionTitle }
 }
 
 exit $LASTEXITCODE
@@ -302,7 +326,7 @@ exit $LASTEXITCODE
 $T_startup = @'
 Старт пула.
 
-1. Взведи свой **вотчер** входящих: следуй скилу `operating-in-a-pool` (или прямо `& "<workspace-root>\.references\ref.ps1" pool-lifecycle`), раздел «Выход хода» — фоновой задачей.
+1. Взведи свой **вотчер** входящих: следуй скилу `operating-in-a-pool` (или прямо `& "<workspace-root>\.references\ref.ps1" pool-lifecycle`), раздел «Выход хода» — инструментом `Monitor` с `persistent: true`.
 2. Подтверди идентичность: `pool mine`.
 
 Дальше — по своему onboarding (`CLAUDE.md` → `_agent_pool_setup-<owner>.md`), жди задач. Если возобновлён в работе — проверь, что вотчер активен, и продолжай прерванное.
@@ -408,7 +432,9 @@ __ROWS_CLAUDE__
 
 Все роли: cwd = `__ROOT__` (весь workspace); координация между ролями — через `pool` (см. Шаг 3); владелец задаётся `$env:AGENT_OWNER`.
 
-**По порядку:** (1) не меняй cwd; (2) прочитай свой `_agent_pool_setup-<owner>.md`; (3) прочитай общий контекст — `00_docs/source-brief/brief.md`, `00_docs/pool-roles.md`; (4) проверь `[POOL INBOX]` (баннер каждый ход) и `pool mine`.
+**По порядку:** (1) не меняй cwd; (2) **открой свою память** — оглавление `MEMORY.md` приходит в контекст само, тела записей нет: начни с якорной записи «где я остановился» (первая строка оглавления) и записей `task_`; (3) прочитай свой `_agent_pool_setup-<owner>.md`; (4) прочитай общий контекст — `00_docs/source-brief/brief.md`, `00_docs/pool-roles.md`; (5) проверь `[POOL INBOX]` (баннер каждый ход) и `pool mine`.
+
+После `/compact` — тот же порядок.
 
 Признак активации pool — баннер `[POOL INBOX] <owner>: ...` в начале каждого промпта.
 
@@ -423,7 +449,7 @@ __COORD__
 - `00_docs/source-brief/brief.md` — параметрическая рамка (заполняет пользователь; роли читают отсюда).
 - `00_docs/pool-roles.md` — роли и конвейер пула.
 - `_agent_pool_setup-<owner>.md` — onboarding по каждой роли.
-- `_handoff_<owner>.md` — handoff между запусками роли (перезаписывать, не плодить).
+- `.memory/<owner>/` — долговременная память роли между запусками (файл на предмет, индекс `MEMORY.md` грузится сам).
 - Координация — скилы `coordinating-on-the-pool-bus` / `operating-in-a-pool`.
 - `<workspace-root>\.launcher\standards\working-principles.md` — принципы работы агентов.
 '@
@@ -473,6 +499,8 @@ Onboarding роли «__LABEL__». Pool `__POOL__` — __COUNT__ ролей. П�
 | Display name | `__DISPLAY__` |
 | Cwd | `__ROOT__` (весь workspace) |
 | Launcher | `claude-__OWNER__.bat`__LEAD_NOTE__ |
+| Память | `.memory\__OWNER__\` — пишешь только сюда; оглавление `MEMORY.md` приходит в контекст само, тела записей открываешь по строке |
+| Шина | путь в `$env:POOL_BUS_ROOT` (ставит wrapper); **соседи, кому можно писать, — `ls` по нему**, а не по памяти |
 
 ## Миссия
 
@@ -533,7 +561,7 @@ __ROWS_CLAUDE__
 
 ## Координация
 
-Между ролями — только через `pool` (maildir-шина), не Tasks API. Команды и правила — скил `coordinating-on-the-pool-bus`; онбординг/вотчер/handoff — скил `operating-in-a-pool`; прямой доступ — `& "<workspace-root>\.references\ref.ps1" pool-coordination`. Живая доска — `board-__NAME__.bat`.
+Между ролями — только через `pool` (maildir-шина), не Tasks API. Команды и правила — скил `coordinating-on-the-pool-bus`; онбординг/вотчер/выход сессии — скил `operating-in-a-pool`; прямой доступ — `& "<workspace-root>\.references\ref.ps1" pool-coordination`. Живая доска — `board-__NAME__.bat`.
 '@
 
 $T_sbReadme = @'
@@ -798,7 +826,10 @@ foreach ($r in $roleList) {
     $leadNote  = if ($r.isLead) { ' (открывает живую доску пула при старте)' } else { '' }
     # watcherless: DevOps/серверные роли НЕ взводят вотчер (стандарт); остальным — стартовый промпт.
     $ipfArg    = if ($r.owner -match 'devops') { '' } else { ' -InitialPromptFile "' + $Root + '\scripts\startup-prompt.md"' }
-    $effortArg = if ($r.isLead) { ' -Effort xhigh' } else { '' }   # lead runs at xhigh; executors inherit global effortLevel (settings.json)
+    # Канон параметров запуска: модель пиним ВСЕМ (иначе `--resume` восстанавливает сессию на её
+    # старой модели, а глобальный /model протекает в пулы), effort — ведущему выше рядовых.
+    # Точечно меняется потом через .launcher\pool-bus\set-pool-runtime.ps1.
+    $runtimeArg = ' -Model "' + $PoolModel + '" -Effort ' + $(if ($r.isLead) { $PoolLeadEffort } else { $PoolEffort })
 
     $wrapper = @'
 @echo off
@@ -810,7 +841,7 @@ set CLAUDE_CODE_TASK_LIST_ID=__POOL__
 set POOL_BUS_ROOT=__BUS__
 set POOL_INBOX_QUIET=1
 __BOARD_LINE__cd /d __ROOT__
-powershell -NoProfile -ExecutionPolicy Bypass -File "__ROOT__\scripts\pool-launch.ps1" -SessionTitle "__DISPLAY__"__IPF____EFFORT__
+powershell -NoProfile -ExecutionPolicy Bypass -File "__ROOT__\scripts\pool-launch.ps1" -SessionTitle "__DISPLAY__"__IPF____RUNTIME__
 if errorlevel 1 pause
 '@
     # typing skill pointer in onboarding «Как ты работаешь» (qa wins if name has both)
@@ -825,7 +856,7 @@ if errorlevel 1 pause
     $rmap['__LEAD_NOTE__']  = $leadNote
     $rmap['__BOARD_LINE__'] = $boardLine
     $rmap['__IPF__']        = $ipfArg
-    $rmap['__EFFORT__']     = $effortArg
+    $rmap['__RUNTIME__']    = $runtimeArg
     $rmap['__TYPING__']     = $typing
     $rmap['__ROWS_ONBOARD__'] = $rowsOnboard
 

@@ -14,8 +14,8 @@ if ($Recovered) {
 } else {
   # Leaked and did NOT visibly recover this turn -> action-needed.
   $title = 'Pool: malformed tool-call leak'
-  $body  = "${Owner}: emitted a tool_call as TEXT and did NOT self-correct. Check the session -- /compact is unreliable; if the poison reached the handoff, reseat + scrub handoff."
-  if ($Count -gt 1) { $body = "${Owner}: $Count malformed tool-calls, no self-correct (format drift). Check/reseat -- /compact unreliable if handoff poisoned." }
+  $body  = "${Owner}: emitted a tool_call as TEXT and did NOT self-correct. Check the session -- /compact is unreliable; if the poison reached role memory, reseat + scrub .memory\${Owner}."
+  if ($Count -gt 1) { $body = "${Owner}: $Count malformed tool-calls, no self-correct (format drift). Check/reseat -- /compact unreliable if role memory poisoned." }
 }
 
 try {

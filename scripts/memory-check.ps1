@@ -1,0 +1,133 @@
+﻿# memory-check.ps1 - структурная проверка каталога долговременной памяти роли.
+#
+# Ничего не чинит и ничего не удаляет: называет места, на которые стоит посмотреть.
+# Все числа - маркеры, а не приговор: повод разобраться, что пошло не так, а не резать на автомате.
+#
+#   powershell -File memory-check.ps1 -Dir "<путь к .memory\<роль>>" [-Quiet]
+#
+# Проверки и их основания:
+#   1. Потолок индекса        - движок обрезает MEMORY.md на 200 строках / 25000 байтах, с предупреждением.
+#   2. Даты в теле записи     - лента дат значит, что записали хронику, а не знание; хроника живёт в задаче.
+#   3. Хронологическое имя    - файл вида 2026-07-31.md не находится по предмету, а только по памяти о дне.
+#   3a. Ссылка на саму себя   - след слияния: у поглощённой части осталась строка «Связано», вести ей некуда.
+#                               Само по себе [[...]] никто не резолвит - ни движок, ни этот скрипт; висячая ссылка законна.
+#   4. Сироты и битые ссылки  - тело без строки в индексе не будет прочитано никогда; строка без тела врёт.
+#   5. Похожие строки индекса - две записи об одном предмете вместо одной обновлённой.
+#   6. Нет признака условия   - СЛАБАЯ эвристика: у записи не видно момента срабатывания. Часто ложная,
+#                               поэтому выводится последней и отдельно помечена.
+
+param(
+    [Parameter(Mandatory)][string]$Dir,
+    [switch]$Quiet
+)
+
+$ErrorActionPreference = 'Stop'
+
+if (-not (Test-Path -LiteralPath $Dir)) { Write-Host "НЕТ КАТАЛОГА: $Dir" -ForegroundColor Red; exit 2 }
+
+$indexPath = Join-Path $Dir 'MEMORY.md'
+$bodies = @(Get-ChildItem -LiteralPath $Dir -Filter '*.md' -File | Where-Object { $_.Name -ne 'MEMORY.md' })
+
+$findings = New-Object System.Collections.Generic.List[string]
+function Note([string]$s) { $findings.Add($s) | Out-Null }
+
+# ---- 1. индекс: потолок --------------------------------------------------
+$idxLines = @(); $idxBytes = 0
+if (Test-Path -LiteralPath $indexPath) {
+    $idxText = [System.IO.File]::ReadAllText($indexPath)
+    $idxBytes = [System.Text.Encoding]::UTF8.GetByteCount($idxText)
+    $idxLines = @($idxText -split "`r?`n")
+    $pctLines = [math]::Round(100 * $idxLines.Count / 200)
+    $pctBytes = [math]::Round(100 * $idxBytes / 25000)
+    if ($pctLines -ge 80 -or $pctBytes -ge 80) {
+        Note "ИНДЕКС близок к потолку: $($idxLines.Count)/200 строк ($pctLines%), $idxBytes/25000 байт ($pctBytes%). Переполнение движок обрежет."
+    }
+    $long = @($idxLines | Where-Object { $_.Length -gt 200 })
+    if ($long.Count) { Note "ИНДЕКС: строк длиннее 200 знаков - $($long.Count). Строка индекса несёт следствие, подробности - в теле." }
+} else {
+    Note "ИНДЕКСА НЕТ: $indexPath. Без него ни одна запись не попадёт в контекст автоматически."
+}
+
+# ---- 2-3. тела: даты внутри и хронологические имена -----------------------
+$datePat = '(\d{4}-\d{2}-\d{2})|(\d{1,2}\.\d{1,2}\.\d{4})'
+$selfRef = @()
+foreach ($b in $bodies) {
+    $t = [System.IO.File]::ReadAllText($b.FullName)
+    $hits = @([regex]::Matches($t, $datePat)).Count
+    if ($hits -ge 3) { Note "ДАТЫ В ТЕЛЕ: $($b.Name) - $hits дат. Похоже на хронику; знание пишут без дат, «когда» помнит git." }
+    if ($b.BaseName -match '^\d{4}[-.]\d{2}') { Note "ИМЯ ПО ДАТЕ: $($b.Name). Такой файл ищется только по памяти о дне, а не по предмету." }
+
+    # Ссылка записи на саму себя. Висячая ссылка ошибкой НЕ считается (движок прямо разрешает ссылаться
+    # на ещё не написанное), и машинного резолва у [[...]] нет ни у кого - ни в движке, ни здесь. Но
+    # ссылка на себя не значит ничего ни при каком чтении, а вот следом слияния служит: у поглощённой
+    # части осталась строка «Связано», вести ей больше некуда. Слияние - ровно та операция, на которой
+    # теряется содержание, и другого её следа у нас нет. Сверяем с ОБЕИМИ формами адреса: движок велит
+    # ссылаться по полю name, на диске ссылаются по имени файла, и законны обе.
+    $nm = ''
+    if ($t.StartsWith('---') -and $t -match '(?m)^name:[ \t]*(.+?)[ \t]*$') { $nm = $Matches[1].Trim().Trim('"') }
+    $sc = 0
+    foreach ($m in [regex]::Matches($t, '\[\[([^\]|]+)\]\]')) {
+        $tgt = $m.Groups[1].Value.Trim()
+        if ($tgt -eq $b.BaseName -or ($nm -and $tgt -eq $nm)) { $sc++ }
+    }
+    if ($sc) { $selfRef += "$($b.Name) x$sc" }
+}
+if ($selfRef.Count) {
+    Note "ССЫЛКА НА СЕБЯ ($($selfRef.Count)): $($selfRef -join ', '). Запись отсылает к самой себе - обычно след слияния: у поглощённой части осталась строка «Связано», а вести ей больше некуда."
+}
+
+# ---- 4. сироты и битые ссылки --------------------------------------------
+if ($idxLines.Count) {
+    $linked = @()
+    foreach ($l in $idxLines) {
+        # Именно markdown-ссылка `](путь.md)`, а не любые скобки: на своей же памяти первая версия
+        # приняла за ссылку перечисление в скобках «(pool-lifecycle, …→COORDINATION.md)» и выдала
+        # две несуществующие «ссылки в никуда». Ложная тревога дороже пропуска: ей верят.
+        foreach ($m in [regex]::Matches($l, '\]\(([^)\s]+\.md)\)')) { $linked += $m.Groups[1].Value }
+    }
+    $linked = @($linked | ForEach-Object { Split-Path $_ -Leaf } | Sort-Object -Unique)
+    $names  = @($bodies | ForEach-Object { $_.Name })
+
+    $orphans = @($names | Where-Object { $linked -notcontains $_ })
+    if ($orphans.Count) { Note "НЕ В ИНДЕКСЕ ($($orphans.Count)): $($orphans -join ', '). Тело без строки в индексе не прочитают." }
+
+    $broken = @($linked | Where-Object { $names -notcontains $_ })
+    if ($broken.Count) { Note "ССЫЛКА В НИКУДА ($($broken.Count)): $($broken -join ', '). Строка индекса обещает файл, которого нет." }
+}
+
+# ---- 5. похожие строки индекса -------------------------------------------
+if ($idxLines.Count) {
+    $norm = @{}
+    foreach ($l in $idxLines) {
+        if ($l -notmatch '\S') { continue }
+        $k = ($l -replace '\[[^\]]*\]\([^)]*\)','' -replace '[^\p{L}\p{Nd}]+',' ').Trim().ToLower()
+        if ($k.Length -lt 12) { continue }
+        $words = @($k -split '\s+' | Where-Object { $_.Length -gt 3 })
+        if ($words.Count -lt 3) { continue }
+        $sig = ($words | Sort-Object | Select-Object -First 6) -join ' '
+        if ($norm.ContainsKey($sig)) { Note "ПОХОЖИЕ СТРОКИ ИНДЕКСА: «$($norm[$sig])» и «$($l.Trim())». Один предмет - одна запись, обновляемая." }
+        else { $norm[$sig] = $l.Trim() }
+    }
+}
+
+# ---- 6. слабая эвристика: не видно условия --------------------------------
+$weak = @()
+foreach ($b in $bodies) {
+    $t = [System.IO.File]::ReadAllText($b.FullName)
+    if ($t.Length -lt 80) { continue }
+    if ($t -notmatch '(?i)если|когда|при |пока |иначе|потому|поэтому|причина|основание|как применять|срабатыва') { $weak += $b.Name }
+}
+
+# ---- отчёт ---------------------------------------------------------------
+if (-not $Quiet) {
+    Write-Host "память: $Dir" -ForegroundColor Cyan
+    Write-Host ("записей: {0}   индекс: {1} строк / {2} байт" -f $bodies.Count, $idxLines.Count, $idxBytes)
+}
+if ($findings.Count -eq 0) { Write-Host "структурных замечаний нет" -ForegroundColor Green }
+else { foreach ($f in $findings) { Write-Host "  - $f" -ForegroundColor Yellow } }
+
+if ($weak.Count) {
+    Write-Host "  ~ слабая эвристика (часто ложная): не видно момента срабатывания у $($weak.Count) записей: $($weak -join ', ')" -ForegroundColor DarkGray
+}
+
+exit 0

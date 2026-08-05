@@ -1,11 +1,13 @@
-# pool.ps1 - SHARED maildir message bus for agent-pool coordination (v1 prototype, 2026-06-21).
+﻿# pool.ps1 - SHARED maildir message bus for agent-pool coordination (v1 prototype, 2026-06-21).
 #
 # ONE shared copy for the whole workspace (<workspace-root>\.launcher\pool-bus\pool.ps1).
 # Pools supply only DATA (a per-pool .bus/ store) + thin binding (hook config, wrapper env).
 # Editing this one file changes behavior for every pool at once - no per-pool rollout.
 #
-# ASCII-only source (PS 5.1 mangles Cyrillic in .ps1 without BOM). Message BODIES are
-# written/read as UTF-8 without BOM at runtime, so Cyrillic DATA is safe.
+# Source is UTF-8 WITH BOM -> Cyrillic in comments/strings is safe here (was ASCII-only until 2026-07-27).
+# Do NOT strip the BOM: PS 5.1 would then read this file as cp1251 and mangle every Cyrillic byte.
+# NB: selftest.ps1 has NO BOM - that file really is ASCII-only, keep Cyrillic out of it.
+# Message BODIES are written/read as UTF-8 without BOM at runtime, so Cyrillic DATA is safe either way.
 #
 # Maildir model: one immutable file = one message; recipient = folder; state = folder; transition = atomic rename.
 #   <BusRoot>/<recipient>/{tmp,new,cur}/   new = unread, cur = claimed/in-progress
@@ -24,8 +26,10 @@
 #   pool.ps1 claim   -Owner <o> -Id <id> -BusRoot <d>
 #   pool.ps1 ack     -Owner <o> -Id <id> -BusRoot <d>
 #   pool.ps1 dismiss -Owner <o> -Id <id> -BusRoot <d> # clear a note (new/ -> archive, one step, no claim/ack)
+#   pool.ps1 ready   -Owner <o> -BusRoot <d>          # confirm readiness for shutdown (ONLY way to set the flag)
 #   pool.ps1 check   -Owner <o> -BusRoot <d>          # one watcher detection pass
-#   pool.ps1 watch   -Owner <o> -BusRoot <d> [-IntervalSeconds 45]   # background sleeping watcher
+#   pool.ps1 watch   -Owner <o> -BusRoot <d> [-IntervalSeconds 45]   # background sleeping watcher (one-shot: fires, exits, must be re-armed)
+#   pool.ps1 monitor -Owner <o> -BusRoot <d> [-IntervalSeconds 20]   # CONTINUOUS sibling of watch: arm with the Monitor tool (persistent), never exits
 #   pool.ps1 hook                                     # UserPromptSubmit hook (env-driven, silent if not a pool)
 #   pool.ps1 activity                                 # hook: write .activity/<owner> state (busy/idle/subagents); reads payload from stdin, env-driven, silent
 #   pool.ps1 board   -BusRoot <d> [-Watch | -Show] [-IntervalSeconds 8]   # table; -Watch=live here; -Show=open live board in a NEW window
@@ -37,7 +41,7 @@
 
 param(
   [Parameter(Mandatory,Position=0)]
-  [ValidateSet('send','reply','note','inbox','mine','claim','ack','dismiss','check','watch','hook','activity','armgate','board','help')]
+  [ValidateSet('send','reply','note','inbox','mine','claim','ack','dismiss','ready','check','watch','monitor','hook','activity','armgate','board','help')]
   [string]$Cmd,
   [string]$To, [string]$From, [string]$Owner, [string]$Subject,
   [string]$Body, [string]$BodyFile, [string]$Id, [string]$InReplyTo,
@@ -69,6 +73,62 @@ function Archive-Dir  { Ensure-Dir (Join-Path $BusRoot 'archive') }
 function Write-Utf8([string]$path,[string]$text) { [System.IO.File]::WriteAllText($path, $text, $script:U8) }
 function Read-Utf8([string]$path) { [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) }
 
+# --- Platform: how to call ourselves back ---------------------------------------------------------
+# The SAME file has to run under Windows PowerShell 5.1 and under pwsh 7 on Linux (pools are moving to
+# a server). Exactly two things differ: the interpreter's NAME and its FLAGS (-ExecutionPolicy exists
+# only on Windows). Everything that SPAWNS a process or PRINTS a ready-made command to the agent must
+# go through these three, because a hardcoded `powershell ...` on Linux fails twice over: the spawn
+# does not start, and - far worse - the agent READS the hint as an instruction, cannot arm its watcher,
+# and concludes the watcher is broken.
+# $IsWindows only exists in PS 6+; under 5.1 there is no such variable at all. Asked via Get-Variable rather
+# than by naming it directly, because a host with Set-StrictMode on THROWS on an undefined variable - and this
+# file does get dot-sourced (tests, ad-hoc checks) into shells whose rules we do not control. Absent = 5.1 = Windows.
+$script:OnWindows = $true
+try { $__isWin = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue; if ($__isWin) { $script:OnWindows = [bool]$__isWin.Value } } catch { }
+function Get-PSHostExe {
+  if ($script:OnWindows) { return 'powershell' }
+  # pwsh may be outside PATH (on the server it is unpacked into ~/.local/pwsh), so ask the process we
+  # are running in rather than guessing a name.
+  try { $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName; if ($exe) { return $exe } } catch { }
+  return 'pwsh'
+}
+function Get-PSHostFlags { if ($script:OnWindows) { return '-NoProfile -ExecutionPolicy Bypass' } else { return '-NoProfile' } }
+# One ready command line that calls THIS pool.ps1 back. On Windows the result is byte-for-byte what the
+# hardcoded strings used to produce - the Windows path must not shift by a single character.
+function Get-SelfCommand([string]$verb, [string]$o, [string]$bus) {
+  $exe = Get-PSHostExe
+  # Quoted OUTSIDE Windows only: there the value is a full path that may contain a space, and an unquoted one
+  # would print the role a command it cannot run - the exact failure this whole change exists to remove. On
+  # Windows it stays the bare word `powershell`, because the produced string must not shift by one character.
+  if (-not $script:OnWindows) { $exe = '"' + $exe + '"' }
+  '{0} {1} -File "{2}" {3} -Owner {4} -BusRoot "{5}"' -f $exe, (Get-PSHostFlags), $PSCommandPath, $verb, $o, $bus
+}
+
+# Hook payload (stdin) reader for `activity` / `armgate`. A real hook gets its JSON and then the harness CLOSES the
+# pipe, so a read returns at EOF. But the same command run BY HAND (agent tool call) gets a stdin that is redirected
+# and NEVER closed -> a plain [Console]::In.ReadToEnd() blocks FOREVER. That is what left armgate processes hanging
+# for hours and sent agents diagnosing phantom orphans. So: read asynchronously and give up fast - no payload means
+# "run as if stdin were empty" (armgate assumes Stop; activity self-cancels). Raw .NET async read on purpose: a
+# scriptblock handed to a thread-pool thread has no runspace and would throw.
+function Read-HookPayload([string]$inline, [int]$timeoutMs = 2000) {
+  if ($inline) { return $inline }
+  if (-not [Console]::IsInputRedirected) { return '' }
+  try {
+    $s = [Console]::OpenStandardInput(); $mem = New-Object System.IO.MemoryStream
+    $buf = New-Object byte[] 8192; $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+      $left = $timeoutMs - $sw.ElapsedMilliseconds
+      if ($left -le 0) { break }                                        # nothing coming -> hand-run, stop waiting
+      $ar = $s.BeginRead($buf, 0, $buf.Length, $null, $null)
+      if (-not $ar.AsyncWaitHandle.WaitOne([int]$left)) { break }
+      $n = $s.EndRead($ar)
+      if ($n -le 0) { break }                                           # EOF -> payload complete
+      $mem.Write($buf, 0, $n)
+    }
+    return [System.Text.Encoding]::UTF8.GetString($mem.ToArray())
+  } catch { return '' }
+}
+
 # id = unix-ms (lexicographically sortable until ~2286) + '-' + 10 random hex. Never reused
 # (time advances; random suffix avoids same-ms collision). Coordination-free: no shared counter, no lock.
 function New-MsgId {
@@ -86,7 +146,7 @@ function Parse-MsgName([string]$name) {
 
 function Get-BodyText {
   if ($BodyFile) { return (Read-Utf8 $BodyFile) }
-  if ($PSBoundParameters.ContainsKey('Body')) { return $Body }
+  if ($Body) { return $Body }
   ''
 }
 
@@ -108,19 +168,22 @@ function Is-Wakeable([string]$name) {
   $true
 }
 
-function Invoke-Send([string]$toOwner,[string]$fromOwner,[string]$subj,[string]$kind,[string]$inReplyTo) {
+function Invoke-Send([string]$toOwner,[string]$fromOwner,[string]$subj,[string]$kind,[string]$inReplyTo,[string]$text) {
   Require-Bus
   if (-not $toOwner -or -not $fromOwner -or -not $subj) { throw 'send/reply require -To -From -Subject' }
   $id     = New-MsgId
   $iso    = (Get-Date).ToString('o')
   $thread = if ($inReplyTo) { $inReplyTo } else { $id }
+  # -text lets an internal caller (the arm-gate) supply the body directly: Get-BodyText reads the -Body param,
+  # which on a hook path carries the hook's JSON payload, not message text.
+  $bodyText = if ($text) { $text } else { (Get-BodyText) }
   $content = "# " + $subj + "`n`n" +
              "| Field | Value |`n|---|---|`n" +
              "| From | "   + $fromOwner + " |`n" +
              "| To | "     + $toOwner   + " |`n" +
              "| Date | "   + $iso       + " |`n" +
              "| Thread | " + $thread    + " |`n`n" +
-             (Get-BodyText) + "`n"
+             $bodyText + "`n"
   $tmp   = Join-Path (Sub-Dir $toOwner 'tmp') ($id + '.tmp')
   $final = Join-Path (Sub-Dir $toOwner 'new') (("{0}.from-{1}.{2}.md") -f $id, $fromOwner, $kind)
   Write-Utf8 $tmp $content
@@ -162,6 +225,10 @@ function Invoke-Claim([string]$o,[string]$mid) {
   $dest = Join-Path (Sub-Dir $o 'cur') ("{0}.{1}.{2}.md" -f $base, $PID, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
   [System.IO.File]::Move($m.FullName, $dest)   # atomic rename = the claim; loser gets FileNotFound
   Write-Output ("CLAIMED: {0}" -f $mid)
+  # Point at the file explicitly. Claiming is NOT reading: on 2026-07-27 a lead claimed a shutdown task,
+  # never opened the body, and ran the procedure from memory - with a flag path that had moved a day earlier.
+  # `mine` printed the path too, but buried among other lines; here it is the next thing the agent sees.
+  Write-Output ("READ THIS FIRST (the body is NOT shown above): {0}" -f $dest)
 }
 
 function Invoke-Ack([string]$o,[string]$mid) {
@@ -171,6 +238,73 @@ function Invoke-Ack([string]$o,[string]$mid) {
   if (-not $m) { Write-Output ("ACK-MISS: {0} not in cur/{1}" -f $mid, $o); return }
   [System.IO.File]::Move($m.FullName, (Join-Path (Archive-Dir) $m.Name))
   Write-Output ("ACKED: {0}" -f $mid)
+}
+
+<#
+    ready - ЕДИНСТВЕННЫЙ способ подтвердить готовность к гашению.
+
+    ЗАЧЕМ (инцидент 2026-07-27): раньше контроллер клал путь флага в тело задачи, а агент создавал файл
+    руками. Лид <pool-a> задачу заклеймил, тело НЕ открыл, выполнил процедуру по памяти прошлых гашений
+    и написал флаг по устаревшему пути (~\.claude\.control\ вместо шины). Контроллер флага не увидел ->
+    «ТАЙМАУТ» -> роль осталась незакрытой. Путь, собранный агентом из текста, не может быть надёжным:
+    он живёт в его памяти и переживает compact. Здесь путь знает СКРИПТ - ошибиться нечем.
+
+    ИНВАРИАНТЫ (нарушишь - вернёшь инцидент):
+      * Флаг = РАЗРЕШЕНИЕ УБИТЬ сессию. Поэтому команда не создаёт его безусловно: нужен живой intent
+        (контроллер начал гашение) И заклеймленная/отакченная задача от контроллера свежее intent'а.
+        Без этих двух условий флаг был бы «стоячим разрешением» - например, от субагента, который
+        наследует env и физически может позвать ready, пока главный агент ещё работает.
+      * Адрес флага НЕ параметр протокола: и шина, и owner берутся из env сессии, как во всех остальных
+        командах. В тексте задачи путь остаётся только как справка для диагностики, не как инструкция.
+      * Гард по «запись обновлена» СОЗНАТЕЛЬНО не ставится. Прежняя причина - handoff-файлы лежат не у
+        всех рядом с шиной (<sub-a> - 9 ролей в <umbrella>\<sub-a>\, operator <pool-a> - в 03_data\) - с
+        переездом памяти в <cwd>\.memory\<роль> отпала. Решение осталось тем же по причине СИЛЬНЕЕ:
+        замер может не удаться сам по себе (хранилище пусто у ещё не переехавшей роли; MEMORY.md
+        залочен ровно тем, что его переписывают), и гард отказывал бы роли, которая всё сделала.
+        Факт записи остаётся ДИАГНОСТИКОЙ в отчёте контроллера, не гейтом.
+#>
+function Invoke-Ready([string]$o) {
+  Require-Bus
+  if (-not $o) { throw 'ready requires -Owner (or set $env:AGENT_OWNER - normally your pool wrapper does)' }
+  $cdir   = Join-Path $BusRoot '.control'
+  $intent = Join-Path $cdir ("shutdown-intent-{0}" -f $o)
+  if (-not (Test-Path $intent)) {
+    Write-Output ("READY-REFUSED: no active shutdown for '{0}' - nothing to confirm." -f $o)
+    Write-Output "  This flag authorizes the controller to KILL your session. With no live shutdown intent"
+    Write-Output "  it would be a standing permission, so no flag is created."
+    return
+  }
+  $intentMs = [long]((Get-Item $intent).LastWriteTimeUtc - [datetime]'1970-01-01').TotalMilliseconds
+  $task = $null
+  foreach ($d in @((Sub-Dir $o 'cur'), (Archive-Dir))) {
+    foreach ($f in @(Get-ChildItem -Path $d -Filter '*.from-pool-controller.*' -File -ErrorAction SilentlyContinue)) {
+      $p = Parse-MsgName $f.Name
+      if (-not $p) { continue }
+      $ms = 0
+      if (-not [long]::TryParse((($p.id -split '-')[0]), [ref]$ms)) { continue }
+      if ($ms -ge $intentMs) { $task = $f; break }
+    }
+    if ($task) { break }
+  }
+  if (-not $task) {
+    Write-Output ("READY-REFUSED: '{0}' has not taken the shutdown task yet." -f $o)
+    Write-Output "  Claim it and READ ITS BODY first - the body carries the current instructions:"
+    Write-Output ("     pool.ps1 mine -Owner {0}" -f $o)
+    return
+  }
+  # Аудит памяти ПЕРЕД флагом: агент только что дописал память и дальше молчит (любой его ход сотрёт
+  # флаг), поэтому фиксация истории и структурная проверка не могут быть его последним действием -
+  # он про них просто не вспомнит. Аудит молчит у ролей, которые ещё на общей памяти.
+  try {
+    $auditor = Join-Path $PSScriptRoot 'memory-audit.ps1'
+    if (Test-Path $auditor) { & $auditor -Owner $o -Reason 'ready' | ForEach-Object { Write-Output $_ } }
+  } catch { Write-Output ("  [memory-audit] пропущен: {0}" -f $_.Exception.Message) }
+
+  [void](Ensure-Dir $cdir)
+  $flag = Join-Path $cdir ("shutdown-ready-{0}" -f $o)
+  [System.IO.File]::WriteAllText($flag, '', $script:U8)
+  Write-Output ("READY: {0}" -f $flag)
+  Write-Output "Now stop: any further turn of YOURS clears this flag by design (the controller would then skip you)."
 }
 
 # Dismiss a note: new/ -> archive in one step (no claim/ack). For messages, not tasks - though it will
@@ -218,29 +352,163 @@ function Invoke-Check([string]$o) {
   }
 }
 
-# --- watcher liveness by REAL process (not heartbeat freshness). The lock carries "<pid>|<startTicks>|<iso>":
+# --- watcher liveness by REAL process (not heartbeat freshness). The lock carries "<pid>|<startTicks>|<iso>"
+# where the ISO is the ARM time and is diagnostic only - nothing parses it, freshness comes from the file mtime:
 # a watcher is truly alive only if that PID runs AND its process StartTime matches (guards PID reuse). Used by the
 # arm path (newest-wins supersede) and the Stop-hook arm-gate. Old-format locks (pre-2026-07, ISO only) parse to
 # pid 0 -> reported not-alive -> a fresh re-arm supersedes them. Board freshness (Get-WatchState) stays unchanged.
 function Read-WatchLock([string]$o) {
   $lock = Join-Path (Join-Path $BusRoot '.watch') ("lock-{0}.txt" -f $o)
-  if (-not (Test-Path $lock)) { return $null }
-  $raw = ''; try { $raw = ([System.IO.File]::ReadAllText($lock)).Trim() } catch { return $null }
+  if (-not (Test-Path $lock)) { return $null }   # not armed: keep this fast path, the arm-gate hits it every Stop
+  # Opened with FileShare.ReadWrite ON PURPOSE. `File.ReadAllText` asks for FileShare.Read, and a LIVE watcher holds
+  # the file for writing - so Windows refused the open, the catch returned $null, and "no lock" reads as "no watcher"
+  # while the watcher is right there. That is the same duplicate-watcher hole from the other side. Two attempts: with
+  # the writer no longer truncating (see Write-WatchLockFull), the only thing left to lose a read to is the instant
+  # of a full rewrite, which happens once per arm.
+  $raw = ''
+  for ($i = 0; $i -lt 2; $i++) {
+    try {
+      $fs = New-Object System.IO.FileStream($lock, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+      try { $sr = New-Object System.IO.StreamReader($fs); try { $raw = $sr.ReadToEnd().Trim() } finally { $sr.Dispose() } } finally { $fs.Dispose() }
+    } catch { $raw = '' }
+    if ($raw) { break }
+    Start-Sleep -Milliseconds 50
+  }
+  if (-not $raw) { return $null }
   $parts = $raw -split '\|'
   $wpid = 0; [void][int]::TryParse([string]$parts[0], [ref]$wpid)
   $ticks = [long]0; if ($parts.Count -ge 2) { [void][long]::TryParse([string]$parts[1], [ref]$ticks) }
   [pscustomobject]@{ path = $lock; procId = $wpid; startTicks = $ticks }
 }
+# Process identity stamp, used ONLY to compare a live pid against the one recorded in the watch lock.
+# Windows: StartTime.Ticks, exactly as before.
+# Linux: field 22 of /proc/<pid>/stat (scheduler ticks since boot) - NOT StartTime, and the difference is a
+# real defect, not a style choice. .NET derives StartTime on Linux as "boot time + starttime" and reads boot
+# time with floating precision, so TWO DIFFERENT PROCESSES get different values for the SAME pid. Measured on
+# the server stand: the lock written by a live monitor read back as 639214528081472580, while three foreign
+# reads of that same pid gave ...475505 / ...483488 / ...478954 (0.3-1.1 ms apart, and never twice the same).
+# An equality check therefore NEVER matches: the arm-gate sees "watcher dead" on every Stop and blocks the role
+# in a loop, while the board shows `w off` next to a monitor that is in fact polling. The /proc field is a
+# fixed integer and reads identically from any process. Zero = "cannot tell", and callers treat that as "skip
+# the identity check" rather than "dead" (same as the old catch{} did).
+function Get-ProcStartStamp([int]$procId) {
+  if ($script:OnWindows) {
+    try { return [long](Get-Process -Id $procId -ErrorAction Stop).StartTime.Ticks } catch { return [long]0 }
+  }
+  try {
+    $stat = [System.IO.File]::ReadAllText("/proc/$procId/stat")
+    # field 2 (comm) is the process name in parentheses and MAY contain spaces and parentheses itself, so the
+    # only safe split point is the LAST ')': everything after it is fixed-width fields. state becomes index 0,
+    # so overall field 22 (starttime) is index 19.
+    $f = ($stat.Substring($stat.LastIndexOf(')') + 2)) -split '\s+'
+    # ZOMBIE: a dead process whose parent never reaped it still HAS a /proc entry, Get-Process still finds it,
+    # and field 22 still reads its original value - so the identity check would match and the caller would call
+    # a dead watcher alive. Windows has no such state (a finished process is simply gone). -1 says "definitely
+    # dead", which the caller must distinguish from 0 = "could not tell".
+    if ($f[0] -eq 'Z') { return [long](-1) }
+    $start = [long]$f[19]
+    # Field 22 counts from BOOT, so the counter restarts on every reboot - unlike the Windows value, which is
+    # absolute time and can never repeat. A lock file outlives a reboot, so pid+ticks could coincide again and
+    # a stale lock would read as a live watcher. Mixing in the boot moment restores uniqueness across reboots.
+    $btime = [long]0
+    foreach ($line in [System.IO.File]::ReadAllLines('/proc/stat')) {
+      if ($line.StartsWith('btime ')) { $btime = [long]$line.Substring(6).Trim(); break }
+    }
+    return $btime * 1000000 + $start
+  } catch { return [long]0 }
+}
 function Test-ProcessAlive([int]$procId, [long]$startTicks) {
   if ($procId -le 0) { return $false }
   $p = $null; try { $p = Get-Process -Id $procId -ErrorAction Stop } catch { return $false }
   if (-not $p) { return $false }
-  if ($startTicks -gt 0) { try { if ($p.StartTime.Ticks -ne $startTicks) { return $false } } catch { } }
+  if ($startTicks -gt 0) {
+    # ⚠️ Windows-ветка остаётся НАТИВНОЙ намеренно (блокер, найденный ведущим на ревью). На 5.1
+    # $p.StartTime для процесса, который нам не дают инспектировать, НЕ бросает - он тихо отдаёт
+    # $null; здесь таких pid 143 из 474 (System, csrss, svchost, антивирус) - ровно тот класс, куда
+    # попадает и вотчер. Нативная сверка читает $null как «не тот процесс» и возвращает false, то
+    # есть гейт требует взвода. Через общий Get-ProcStartStamp это стало бы 0 -> сверка личности
+    # ПРОПУСКАЕТСЯ -> «вотчер жив» -> гейт молчит. Отказ не гипотетический: monitor свой лок никогда
+    # не удаляет, после резкого конца сессии на диске остаётся pid|stamp, pid переиспользуется - и
+    # роль стоит без побудки. Замер на одном локе: оригинал exit 2, общая ветка exit 0.
+    if ($script:OnWindows) { try { if ($p.StartTime.Ticks -ne $startTicks) { return $false } } catch { } }
+    else {
+      $now = Get-ProcStartStamp $procId
+      if ($now -lt 0) { return $false }                              # zombie: /proc entry without a process
+      if ($now -gt 0 -and $now -ne $startTicks) { return $false }
+    }
+  }
   return $true
 }
 function Test-WatcherAlive([string]$o) { $lk = Read-WatchLock $o; if (-not $lk) { return $false }; Test-ProcessAlive $lk.procId $lk.startTicks }
+# Is an arm for this owner ALREADY booting? (a `watch` process exists but has not written its lock yet). Lets the
+# arm-gate tell "arming, wait" apart from "nothing armed" instead of reading the boot window as a failure. Matched on
+# the owner arg only: BusRoot carries quotes/backslashes and is fragile to match; a cross-pool same-owner false
+# positive would only cost a few seconds of waiting on a path that is already blocking.
+function Test-ArmInFlight([string]$o) {
+  $rxCmd = '(?i)pool\.ps1["'']?\s+(watch|monitor)\b'   # monitor is the continuous sibling; both count as "arming"
+  $rxOwn = '(?i)-Owner\s+["'']?' + [regex]::Escape($o) + '(?=["'']|\s|$)'
+  if ($script:OnWindows) {
+    $procs = @()
+    try { $procs = @(Get-CimInstance -Query "SELECT CommandLine FROM Win32_Process WHERE Name='powershell.exe'" -ErrorAction Stop) } catch { return $false }
+    foreach ($p in $procs) {
+      if ($p.CommandLine -and $p.CommandLine -match $rxCmd -and $p.CommandLine -match $rxOwn) { return $true }
+    }
+    return $false
+  }
+  # Linux: the same question, asked of /proc. Deliberately NOT `ps` and NOT Get-Process().CommandLine -
+  # /proc is always there, needs no external binary, and does not depend on how pwsh was built. Arguments
+  # in /proc/<pid>/cmdline are NUL-separated; joining them with a space gives the same shape the WMI
+  # CommandLine has, so both branches feed the identical regexes above.
+  try {
+    foreach ($d in [System.IO.Directory]::EnumerateDirectories('/proc')) {
+      $n = 0
+      if (-not [int]::TryParse([System.IO.Path]::GetFileName($d), [ref]$n)) { continue }   # only numeric dirs are processes
+      $cl = ''
+      # A process can exit between the listing and the read - that is normal, skip it quietly.
+      try { $cl = ([System.IO.File]::ReadAllText((Join-Path $d 'cmdline'))) -replace "`0", ' ' } catch { continue }
+      if ($cl -and $cl -match $rxCmd -and $cl -match $rxOwn) { return $true }
+    }
+  } catch { return $false }
+  return $false
+}
+# --- Heartbeat, rewritten 2026-08-03 after a field defect: `Set-Content` here killed the whole watcher on a
+# lock-file race. Six crashes across four roles in two days (<pool-a>, 30-31.07), two distinct failure texts on
+# this one line: a sharing violation, and "stream is not readable" WITH A ZERO-BYTE lock left on disk.
+# The zero-byte outcome is the dangerous one: truncate succeeded, write did not. The board (Get-WatchState) only
+# looks at LastWriteTime, so it still reports `w on`; the arm-gate reads the CONTENT, gets pid 0, demands an arm -
+# and the newest-wins supersede cannot kill the prior watcher either (it reads pid 0 too). Result: TWO live
+# watchers on one owner, both writing the same file. The race feeds itself.
+#
+# Fix: stop rewriting the content every tick. `pid|startTicks` never change while the process lives, and the third
+# field (ISO) is parsed by NOBODY (the board lives on LastWriteTime). So the content is written ONCE at arm, and
+# each tick only touches the file's timestamp: that needs FILE_WRITE_ATTRIBUTES, not access to the data, so the
+# conflict surface shrinks by an order of magnitude and truncation cannot happen at all. The ISO field therefore
+# now records the ARM time, not the last beat - it is diagnostic only.
+function Write-WatchLockFull([string]$lock, [int]$procId, [long]$startTicks) {
+  $text  = '{0}|{1}|{2}' -f $procId, $startTicks, (Get-Date).ToString('o')
+  $bytes = [System.Text.Encoding]::ASCII.GetBytes($text + "`r`n")   # CRLF keeps the on-disk shape Set-Content used
+  for ($i = 0; $i -lt 3; $i++) {
+    try {
+      [void](Ensure-Dir (Split-Path $lock -Parent))                 # .watch can be gone (fresh bus / cleaned by hand)
+      # OpenOrCreate + SetLength AFTER the write (never Create): a failed write leaves the PREVIOUS content intact
+      # instead of a zero-byte lock. FileShare.Read (not ReadWrite): a second writer is refused - that is what the
+      # retry below absorbs - while readers are let in.
+      $fs = New-Object System.IO.FileStream($lock, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+      try { $fs.Write($bytes, 0, $bytes.Length); $fs.SetLength($bytes.Length); $fs.Flush() } finally { $fs.Dispose() }
+      return $true
+    } catch { Start-Sleep -Milliseconds 50 }
+  }
+  return $false
+}
+function Touch-WatchLock([string]$lock) {
+  try { [System.IO.File]::SetLastWriteTime($lock, (Get-Date)); return $true } catch { return $false }
+}
+# One beat. Returns $false only if BOTH the touch and the full rewrite failed - the caller counts those in a row,
+# because a heartbeat that fails forever is exactly as invisible as the crash this replaced (board says off, the
+# arm-gate demands an arm every Stop, and the agent stacks duplicate watchers on a monitor that is in fact alive).
 function Write-WatchLock([string]$lock, [int]$procId, [long]$startTicks) {
-  Set-Content -Path $lock -Value ('{0}|{1}|{2}' -f $procId, $startTicks, (Get-Date).ToString('o')) -Encoding ASCII
+  if (Touch-WatchLock $lock) { return $true }        # normal path: the file exists and only its mtime moves
+  Write-WatchLockFull $lock $procId $startTicks      # gone (a fired `watch` deletes it) or the touch was refused
 }
 
 # Background "sleeping watcher": polls check; on first fire prints claim/work + exits (harness wakes the agent).
@@ -250,15 +518,18 @@ function Write-WatchLock([string]$lock, [int]$procId, [long]$startTicks) {
 function Invoke-Watch([string]$o,[int]$interval) {
   Require-Bus
   $lock  = Join-Path (Watch-Dir) ("lock-{0}.txt" -f $o)
-  $myStart = [long]0; try { $myStart = (Get-Process -Id $PID).StartTime.Ticks } catch { }
+  $myStart = Get-ProcStartStamp $PID   # cross-platform stamp; the reader must compare like with like
   $prev = Read-WatchLock $o
   if ($prev -and $prev.procId -ne $PID -and (Test-ProcessAlive $prev.procId $prev.startTicks)) {
     # normal re-arm has no live prior (it fired and exited), so this only supersedes an orphan/duplicate
     try { Stop-Process -Id $prev.procId -Force -ErrorAction Stop; Write-Output ("[WATCH] {0}: superseded prior watcher (pid {1})" -f $o, $prev.procId) } catch { }
   }
-  $reArm = '  Bash(run_in_background:true): powershell -NoProfile -ExecutionPolicy Bypass -File "{0}" watch -Owner {1} -BusRoot "{2}"' -f $PSCommandPath, $o, $BusRoot
+  $reArm = '  Bash(run_in_background:true): ' + (Get-SelfCommand 'watch' $o $BusRoot)
+  [void](Write-WatchLockFull $lock $PID $myStart)   # identity written once; the loop only touches the timestamp
+  $missed = 0
   while ($true) {
-    Write-WatchLock $lock $PID $myStart   # heartbeat: pid + StartTime ticks (liveness) + timestamp (board freshness)
+    if (Write-WatchLock $lock $PID $myStart) { $missed = 0 } else { $missed++ }
+    if ($missed -eq 3) { Write-Output ("[WATCH] {0}: heartbeat lock is not writable ({1}) - the watcher is alive, but the board and the Stop arm-gate may stop seeing it. Check for a SECOND watcher of yours writing the same file." -f $o, $lock) }
     $det = Invoke-Check $o
     if (($det -join "`n") -match '\[WAKE\]') {
       if (Test-Path $lock) { Remove-Item $lock -Force -ErrorAction SilentlyContinue }
@@ -273,11 +544,70 @@ function Invoke-Watch([string]$o,[int]$interval) {
       Write-Output "STEP 2 (still BEFORE you start working): re-arm the watcher:"
       Write-Output $reArm
       Write-Output "STEP 3: do the claimed work; reply/ack when done."
-      # --- TEMP migration notice: REMOVE once pools have cycled. Added 2026-07-05; target removal ~2026-07-19. Tracked in Launcher handoff. ---
-      Write-Output "  --"
-      Write-Output "  NOTE (temporary, 2026-07 migration): the wake order is now claim -> re-arm -> work (it used to be 're-arm FIRST'). If your _handoff or _agent_pool_setup still tells you to re-arm first, or calls the watcher 'one-shot / won't re-fire on a still-pending task', update that one line to match this order. You need not touch any script - Launcher will remove this notice later."
-      # --- end TEMP migration notice ---
+      # Migration notice (wake order claim -> re-arm -> work) removed 2026-07-27: pools have cycled.
+      # Kept the wake output SHORT on purpose - this is the exact turn where the agent must go read the task,
+      # and every extra line here competes for that attention.
       return
+    }
+    Start-Sleep -Seconds $interval
+  }
+}
+
+# --- CONTINUOUS watcher (2026-07-30). Sibling of Invoke-Watch, NOT a replacement: same detection (Invoke-Check),
+# same lock/heartbeat, but it NEVER exits. Armed with the Monitor tool (persistent:true), where every printed line
+# reaches the agent as a notification mid-conversation.
+# WHY: the harness reaps background Bash tasks at will (measured: 11 reaps in a day, 47s..10min apart), and EVERY
+# reap wakes the agent = a full turn with full context = usage burned. That cost, not the re-arm itself, is what
+# made the owner switch pool watchers off. A watcher that does not exit removes those turns entirely.
+# WAKE-LOOP TRAP DOES NOT APPLY HERE: the trap needs a re-arm before the claim (the fresh watcher sees the task
+# still in new/ and fires again). There is no re-arm here. The claim stays the suppressor, and re-announcing is
+# rate-limited by MonRepeatSeconds, so an unclaimed task nags rarely instead of looping.
+# LOCK IS THE SAME FILE on purpose: the Stop-hook arm-gate and the board read liveness from it, so neither needs a
+# single edit - and if this monitor is ever reaped, the lock goes stale and the gate demands an arm exactly as today.
+$script:MonRepeatSeconds = 900   # re-announce an unclaimed task at most this often (a lost notification must not lose the task)
+function Say-Mon([string]$s) {
+  # Write straight to the console and flush: a process that never exits has no flush-on-exit, and a block-buffered
+  # pipe would swallow every notification while looking exactly like "nothing arrived".
+  [Console]::Out.WriteLine($s); [Console]::Out.Flush()
+}
+function Invoke-Monitor([string]$o,[int]$interval) {
+  Require-Bus
+  $lock  = Join-Path (Watch-Dir) ("lock-{0}.txt" -f $o)
+  $myStart = Get-ProcStartStamp $PID   # cross-platform stamp; the reader must compare like with like
+  $prev = Read-WatchLock $o
+  if ($prev -and $prev.procId -ne $PID -and (Test-ProcessAlive $prev.procId $prev.startTicks)) {
+    try { Stop-Process -Id $prev.procId -Force -ErrorAction Stop; Say-Mon ("[MONITOR] {0}: superseded prior watcher (pid {1})" -f $o, $prev.procId) } catch { }
+  }
+  Say-Mon ("[MONITOR] {0}: armed, polling every {1}s. It does NOT exit on a task - nothing to re-arm." -f $o, $interval)
+  $saidKey = ''
+  $saidAt  = [datetime]::MinValue
+  [void](Write-WatchLockFull $lock $PID $myStart)   # identity written once; the loop only touches the timestamp
+  $missed = 0
+  while ($true) {
+    if (Write-WatchLock $lock $PID $myStart) { $missed = 0 } else { $missed++ }
+    # Say it, do not die of it: a monitor that beats into the void looks exactly like a monitor with no mail.
+    if ($missed -eq 3) { Say-Mon ("[MONITOR] {0}: heartbeat lock is not writable ({1}) - I am alive, but the board and the Stop arm-gate may stop seeing me. Most likely a SECOND watcher of yours is writing the same file; tell Launcher if it persists." -f $o, $lock) }
+    $det = Invoke-Check $o                # captured, not printed: only OUR lines become notifications
+    $ids = @()
+    if (($det -join "`n") -match '\[WAKE\]') {
+      foreach ($line in $det) { $mm = [regex]::Match($line, 'new:\s*(\S+)'); if ($mm.Success) { $ids += $mm.Groups[1].Value } }
+    }
+    if ($ids.Count -eq 0) {
+      $saidKey = ''; $saidAt = [datetime]::MinValue
+    } else {
+      $key = (($ids | Sort-Object) -join ',')
+      $quiet = ((Get-Date) - $saidAt).TotalSeconds
+      if ($key -ne $saidKey -or $quiet -ge $script:MonRepeatSeconds) {
+        if ($key -eq $saidKey) {
+          Say-Mon ("[MONITOR] {0}: still {1} unclaimed task(s) - the earlier notice was not acted on." -f $o, $ids.Count)
+        } else {
+          Say-Mon ("[MONITOR] {0}: {1} new task(s)." -f $o, $ids.Count)
+        }
+        Say-Mon "STEP 1 (do FIRST): claim each below - a claim moves it into your cur/ and this monitor goes quiet about it:"
+        foreach ($n in $ids) { Say-Mon ("   {0}   ->  pool.ps1 claim -Owner {1} -Id {0}" -f $n, $o) }
+        Say-Mon "STEP 2: do the claimed work; reply/ack when done. Nothing to re-arm."
+        $saidKey = $key; $saidAt = Get-Date
+      }
     }
     Start-Sleep -Seconds $interval
   }
@@ -315,7 +645,7 @@ function Clear-StaleSubMarkers([string]$adir) {
 function Invoke-Activity {
   try {
     if ([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($BusRoot)) { return }   # not a pool session
-    $payload = if ($Body) { $Body } elseif ([Console]::IsInputRedirected) { [Console]::In.ReadToEnd() } else { return }
+    $payload = Read-HookPayload $Body
     if ([string]::IsNullOrWhiteSpace($payload)) { return }
     $o = $null; try { $o = $payload | ConvertFrom-Json } catch { return }
     if (-not $o) { return }
@@ -323,12 +653,37 @@ function Invoke-Activity {
     switch ("$($o.hook_event_name)") {
       'UserPromptSubmit' {
         Write-ActivityState $adir 'busy'; Clear-StaleSubMarkers $adir
-        # Shutdown controller: a NEW turn = the agent is working again -> any stale readiness flag is
-        # invalidated. Source-agnostic (watcher / peer / direct input): any turn clears shutdown-ready
-        # so a stale flag can't authorize a -KillOnly shutdown of a session whose handoff has gone stale.
-        # Cleared ONLY here (not on Stop: the flag is set at the end of the handoff turn, and Stop would
-        # wipe it immediately).
-        try { $rf = Join-Path $env:USERPROFILE (".claude\.control\shutdown-ready-{0}" -f $Owner); if (Test-Path $rf) { Remove-Item $rf -Force -ErrorAction SilentlyContinue } } catch { }
+        # Внешний контроллер завершения: НОВЫЙ ход агента = handoff устарел -> флаг готовности
+        # инвалидируется. Стираем ТОЛЬКО здесь (не на Stop: флаг ставится в конце handoff-хода,
+        # Stop бы его сразу снёс).
+        #
+        # НО ход бывает и НЕ агентский. Завершение фоновой задачи (одноразовый вотчер отстрелялся;
+        # вытесненный chat_sentinel упал) харнесс кладёт в ТУ ЖЕ очередь промптов, что и ввод
+        # человека -> новый promptId -> этот хук. Слепое стирание убивало флаг сразу после его
+        # создания: воспроизведено на operator/<pool-a> и methodist/<pool-b> 2026-07-27.
+        #
+        # Замер 2026-07-27 (транскрипты <pool-a> + <pool-b> + launcher): машинный ход несёт
+        # origin.kind=task-notification / promptSource=system (1246 шт.) против typed/human (715),
+        # разделение чистое, а ТЕКСТ такого хода буквально начинается с <task-notification>.
+        # Матчим по СЫРОМУ payload, а не по имени поля: док обещает user_message, замер даёт
+        # prompt — имя нестабильно, подстрока нет.
+        #
+        # ИНВАРИАНТЫ (не отменять молча):
+        #   1. Ход человека флаг стирает — иначе -KillOnly погасит сессию с протухшим handoff.
+        #   2. Машинная побудка флаг НЕ стирает — иначе см. инцидент выше.
+        #   3. Условие только СУЖАЕТ стирание: не распознали признак -> $machineWake=$false ->
+        #      поведение ровно сегодняшнее. Регресс невозможен по построению (важно: файл общий
+        #      на все пулы и приземляется на живые сессии немедленно).
+        #   4. Флаг лежит В ШИНЕ ПУЛА (<BusRoot>\.control\, перенос 2026-07-27), не в общем
+        #      ~\.claude\.control: имена ролей повторяются между пулами, и общий каталог давал
+        #      кросс-пул — ход человека в одном пуле сносил отметку одноимённой роли в другом.
+        #      Слаг пула хуку недоступен, а BusRoot есть всегда -> адресуемся точно.
+        #   5. Признак ПОДТВЕРЖДЁН прямым замером на живом пуле (зонд 2026-07-27, снят после подтверждения):
+        #      57 машинных побудок против 40 человеческих, разделение чистое, ложных срабатываний нет.
+        $machineWake = ($payload -match '<task-notification>')
+        if (-not $machineWake) {
+          try { $rf = Join-Path (Join-Path $BusRoot '.control') ("shutdown-ready-{0}" -f $Owner); if (Test-Path $rf) { Remove-Item $rf -Force -ErrorAction SilentlyContinue } } catch { }
+        }
       }
       'Stop'             { Write-ActivityState $adir 'idle' }
       'SubagentStart'    { if ($o.agent_id) { [void](Ensure-Dir $adir); [System.IO.File]::WriteAllText((Join-Path $adir ("sub-{0}" -f $o.agent_id)), '', $script:U8) } }
@@ -347,27 +702,82 @@ function Invoke-Activity {
 function Invoke-ArmGate {
   if ($env:POOL_WATCHER -ne '1') { return }                                             # opt-in: only watcher roles
   if ([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($BusRoot)) { return }
-  $payload = if ($Body) { $Body } elseif ([Console]::IsInputRedirected) { [Console]::In.ReadToEnd() } else { '' }
+  $payload = Read-HookPayload $Body
   $evt = ''
   if ($payload) { try { $evt = "$(($payload | ConvertFrom-Json).hook_event_name)" } catch { } }
   if ($evt -and $evt -ne 'Stop') { return }                                             # SubagentStop / other -> ignore
   $mark = Join-Path (Watch-Dir) ("armgate-{0}.txt" -f $Owner)
+  $off  = Join-Path (Watch-Dir) ("armgate-off-{0}.txt" -f $Owner)   # "disengage already announced" (one note per incident)
   if (Test-WatcherAlive $Owner) {
     if (Test-Path $mark) { Remove-Item $mark -Force -ErrorAction SilentlyContinue }      # armed -> clear backoff
+    if (Test-Path $off)  { Remove-Item $off  -Force -ErrorAction SilentlyContinue }      # incident over -> re-arm the announcement
     return
   }
-  if (Test-Path $mark) {
-    $age = ((Get-Date) - (Get-Item $mark).LastWriteTime).TotalSeconds
-    if ($age -lt 30) {
-      # arming isn't taking (spawn failing?) -> do NOT block again -> never wedge the session. Warn on stderr, exit 0 (allow).
-      [Console]::Error.WriteLine("[POOL WATCHER] arm was requested last turn but no live watcher is detected for '$Owner'. Not blocking again. Background spawn may be failing (antivirus / binary); arm manually if this repeats: powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" watch -Owner $Owner -BusRoot `"$BusRoot`"")
-      return
+  # An arm spawned this turn needs ~1s of PowerShell startup before its watcher writes the first lock. A Stop landing
+  # inside that window would report "no watcher" although arming DID succeed -> the agent re-arms a duplicate and
+  # burns a turn on a phantom failure. So when an arm is already in flight, wait for its lock instead of blocking.
+  # Costs nothing on the healthy path (watcher alive -> returned above) and nothing when no arm is running.
+  if (Test-ArmInFlight $Owner) {
+    $deadline = (Get-Date).AddSeconds(8)
+    while ((Get-Date) -lt $deadline) {
+      Start-Sleep -Milliseconds 150
+      if (Test-WatcherAlive $Owner) {
+        if (Test-Path $mark) { Remove-Item $mark -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $off)  { Remove-Item $off  -Force -ErrorAction SilentlyContinue }
+        return
+      }
     }
   }
-  Set-Content -Path $mark -Value ((Get-Date).ToString('o')) -Encoding ASCII
+  # Backoff counts ATTEMPTS, not seconds. Elapsed time cannot tell "the spawn is broken" from "the watcher armed,
+  # fired and exited": both leave no live watcher at the next Stop. The old <30s window therefore disengaged the
+  # gate silently in the very state where it matters most - a task waiting in new/ wakes a fresh watcher on its
+  # first poll, so the watcher dies within seconds of EVERY arm. (Incident 2026-07-27, <pool-a>/operator.)
+  # Marker payload is "<blocks>|<iso>": the count is bumped only when this gate actually blocks, and reset only
+  # when this gate sees a live watcher (above) - i.e. it counts consecutive arms that left nothing alive behind.
+  # A pre-2026-07-27 ISO-only marker parses to 0, so the first Stop after rollout blocks (safe direction).
+  $blocks = 0
+  try {
+    if (Test-Path $mark) {
+      $mAge = ((Get-Date) - (Get-Item $mark).LastWriteTime).TotalSeconds
+      # Older than the board's own staleness bar (150s, see Get-WatchState) -> a leftover from an earlier struggle,
+      # not evidence about this one -> start counting over. This is also the self-heal: a disengaged gate re-arms
+      # itself after one quiet window instead of staying off until a human intervenes. Safe direction, because a
+      # reset only ever restores BLOCKING - and a runaway block->arm->block loop cycles in seconds, so it can
+      # never outlive the marker and slip past the cap.
+      if ($mAge -le 150) { [void][int]::TryParse((([System.IO.File]::ReadAllText($mark)).Trim() -split '\|')[0], [ref]$blocks) }
+    }
+  } catch { $blocks = 0 }
+  # Cap of 2: two blocks are the MINIMUM that closes the hole above (block -> arm -> instant fire -> block -> arm
+  # -> claim), and one more would only add a wasted turn when the spawn is genuinely dead. Past the cap the gate
+  # steps aside, because a broken spawn must never wedge a session - that is the whole reason a backoff exists.
+  if ($blocks -ge 2) {
+    # Count only WAKEABLE mail: a quiet note (including this gate's own disengage note) never wakes a watcher, so
+    # counting it would tell the agent to "claim" something that is dismissed, not claimed - and point at the wrong cause.
+    $pending = 0
+    try { $pending = @(Get-ChildItem -Path (Sub-Dir $Owner 'new') -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { Is-Wakeable $_.Name }).Count } catch { }
+    $why = if ($pending -gt 0) {
+      "Most likely cause: $pending message(s) still sit in your new/ - an unclaimed task wakes each fresh watcher immediately, so every arm dies on the spot. Claim them first (pool.ps1 claim -Owner $Owner -Id <id>), then arm."
+    } else {
+      "Most likely cause: the spawn itself is failing (antivirus blocking child processes) - report that to Launcher and carry on."
+    }
+    # exit 0 stderr reaches NOBODY (only an exit-2 Stop hook talks to the model), so the safety net used to switch
+    # itself off invisibly - which is how this bug survived unnoticed. Leave a quiet note instead: kind `note` never
+    # wakes a watcher (Is-Wakeable), and Invoke-Hook surfaces it as [POOL NOTE] on the agent's very next turn.
+    # Guarded by $off so one incident produces one note, and recovery (watcher alive) re-arms the announcement.
+    if (-not (Test-Path $off)) {
+      try {
+        [void](Invoke-Send $Owner 'system' ("arm-gate disengaged - '$Owner' is idling WITHOUT a watcher") 'note' '' `
+          ("The Stop arm-gate blocked twice, both arms left no live watcher, so it has stepped aside to avoid wedging you.`n`n$why`n`nArm with the Monitor tool (persistent=true): $(Get-SelfCommand 'monitor' $Owner $BusRoot)`n`nUntil a watcher is alive you will NOT be woken by incoming pool messages. Clear this note with: pool.ps1 dismiss -Owner $Owner"))
+        Set-Content -Path $off -Value ((Get-Date).ToString('o')) -Encoding ASCII
+      } catch { }
+    }
+    [Console]::Error.WriteLine("[POOL WATCHER] '$Owner': arming was requested twice and still no live watcher. NOT blocking again (a broken spawn must never wedge you). $why")
+    return
+  }
+  try { Set-Content -Path $mark -Value ('{0}|{1}' -f ($blocks + 1), (Get-Date).ToString('o')) -Encoding ASCII } catch { }
   # Block the stop via EXIT CODE 2: the harness restarts the turn and feeds this stderr text to the agent, which then
   # arms the watcher. (exit-2 + stderr reaches the model; a stdout `reason` on a Stop hook would show only to the user.)
-  [Console]::Error.WriteLine("No live pool watcher for '$Owner'. Before you stop, arm it as a background task now: run a Bash tool call with run_in_background=true executing:  powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" watch -Owner $Owner -BusRoot `"$BusRoot`"  -- this wakes you on incoming pool tasks while you idle. Launch it, then you may stop.")
+  [Console]::Error.WriteLine("No live pool watcher for '$Owner'. Before you stop, arm the CONTINUOUS monitor - use the Monitor tool with persistent=true (NOT a background Bash task), command:  $(Get-SelfCommand 'monitor' $Owner $BusRoot)  -- it wakes you on incoming pool tasks while you idle and does NOT exit when one arrives, so there is nothing to re-arm afterwards. Claim the task as usual: the claim is what makes it go quiet.  NB this is ROUTINE, not a fault: a monitor lives only as long as the session, so you land here after a fresh start or a /compact - not because anything broke. Just arm it: do NOT investigate, do NOT hunt processes or locks, and do NOT run `pool.ps1 armgate` by hand to double-check - it is a hook, not a diagnostic (it reads stdin, so a manual call sits there forever). Only if the Monitor tool is unavailable to you, fall back to the old one-shot watcher: same command with `watch` instead of `monitor`, launched as a Bash tool call with run_in_background=true - it fires once and must be re-armed every time. If arming genuinely fails twice in a row, this gate stops blocking and tells you so.")
   exit 2
 }
 
@@ -379,8 +789,8 @@ function Paint([string]$text, [string]$sgr) {
   $e + '[' + $sgr + 'm' + $text + $e + '[0m'
 }
 
-# Watcher liveness from its heartbeat lock (.watch/lock-<owner>.txt): `pool watch` rewrites it every cycle
-# and deletes it on fire/exit. Fresh lock = armed & sleeping; stale = died/froze; absent = not armed (or the
+# Watcher liveness from its heartbeat lock (.watch/lock-<owner>.txt): a watcher re-stamps its mtime every cycle
+# (content is written once at arm) and deletes it on fire/exit. Fresh lock = armed & sleeping; stale = died/froze; absent = not armed (or the
 # brief fire->re-arm gap, or a watcher the user killed on purpose). Read-only: never creates .watch/.
 # Threshold is generous vs the watcher's own self-stale (default interval 45s -> 135s) to avoid boundary flap.
 function Get-WatchState([string]$o) {
@@ -417,6 +827,57 @@ function Get-ActivityState([string]$o) {
   return [pscustomobject]@{ act = 'idle'; subs = 0 }
 }
 
+# One-line memory footer under the board (target config §6: the memory board lives next to the task
+# board). A SUMMARY only - per-role detail stays in memory-board.ps1, which is a separate, occasional
+# run and may spend a process per role on the structural checker.
+#
+# Three deliberate restraints:
+#  - nothing is printed unless the roll-out switch is on for THIS pool, so today every board stays
+#    byte-identical to what it is now;
+#  - cwd is read from the marker the launcher wrote (Resolve-AgentMemoryCwdForBus), never guessed
+#    from the bus path - that guess is wrong for 5 pools out of 17, and wrong in the silent direction;
+#  - no invented thresholds. Only facts the owner can act on: how many stores exist, the highest
+#    index fill, and which roles have a store with no index at all (nothing there reaches the context).
+#    Red is reserved for the two states that are facts rather than opinions: the ceiling is already
+#    reached, or a store has no index.
+function Write-MemoryFooter([object[]]$Rows, [string]$Bus, [string]$Tag) {
+  $mod = Join-Path $PSScriptRoot 'agent-memory.ps1'
+  if (-not (Test-Path $mod)) { return }
+  . $mod
+  $cwd = Resolve-AgentMemoryCwdForBus -BusRoot $Bus
+  if (-not $cwd) { return }                                  # cwd unknown - say nothing rather than lie
+  if (-not (Test-AgentMemoryEnabled -Cwd $cwd)) { return }   # not rolled out here - board unchanged
+
+  $have = 0; $maxPct = 0; $maxWho = ''; $noIndex = @(); $unknown = 0
+  foreach ($r in $Rows) {
+    if (-not (Test-AgentOwnerName -Owner $r.name)) { continue }   # bus mailbox that cannot be a store name
+    $st = Get-AgentMemoryStats -RoleDir (Join-Path (Join-Path $cwd '.memory') $r.name)
+    if ($st.Unknown) { $unknown++; continue }
+    if (-not $st.Exists) { continue }
+    $have++
+    if (-not $st.HasIndex) { $noIndex += $r.name; continue }
+    if ($st.Pct -gt $maxPct) { $maxPct = $st.Pct; $maxWho = $r.name }
+  }
+
+  $line = "memory  {0}/{1} stores" -f $have, $Rows.Count
+  if ($maxPct) { $line += "   index max {0}% in {1}" -f $maxPct, $maxWho }
+  if ($noIndex.Count) { $line += "   NO INDEX: " + ($noIndex -join ', ') }
+  if ($unknown) { $line += "   {0} busy" -f $unknown }
+  $sgr = if ($noIndex.Count -or $maxPct -ge 100) { '91' } elseif ($have -eq 0) { '93' } else { '90' }
+  Write-Output (Paint $line $sgr)
+  # Подсказка обязана быть КОПИРУЕМОЙ. Тег в шапке борда - имя каталога рядом с шиной, а memory-board
+  # спрашивает СЛАГ манифеста; на первом же живом пуле они разошлись (`.launcher` против `supervisors`),
+  # и совет не сработал бы. Слаг берём из манифеста, если он лежит в cwd; не нашёлся - даём -All,
+  # который верен всегда.
+  $slug = $null
+  try {
+    $mf = Join-Path $cwd 'pool.manifest.json'
+    if (Test-Path -LiteralPath $mf) { $slug = (Get-Content -LiteralPath $mf -Raw -Encoding UTF8 | ConvertFrom-Json).slug }
+  } catch { $slug = $null }
+  $hint = if ($slug) { 'memory-board.ps1 -Pool ' + $slug } else { 'memory-board.ps1 -All' }
+  Write-Output (Paint ("        detail: " + $hint) '90')
+}
+
 # Monitor board: color-coded table (green=in progress, yellow=pending, gray=idle) + a totals line.
 # Each row also shows watcher liveness (w on/off/stale <age> from .watch/lock-<owner>) and activity
 # (act busy/idle/sub<N>/busy? from .activity/<owner>); header sums armed watchers + active agents.
@@ -426,7 +887,10 @@ function Invoke-Board {
   [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
   $script:useColor = -not [Console]::IsOutputRedirected
   $W = try { [Console]::WindowWidth } catch { 100 }; if ($W -lt 50) { $W = 100 }
-  if (-not (Test-Path $BusRoot)) { Write-Output (Paint '(empty bus)' '90'); return }
+  # «Каталога шины нет» и «шина пустая» — РАЗНЫЕ вещи. Первое почти всегда = кривой путь (поле bus в
+  # манифесте / POOL_BUS_ROOT во wrapper'е), и молчать о нём нельзя: серое '(empty bus)' на этом месте
+  # маскировало баг 2026-07-27 — борд «DIV Extraction» выглядел просто пустым окном. Одна строка, не простыня.
+  if (-not (Test-Path $BusRoot)) { Write-Output (Paint ('bus dir NOT FOUND: ' + $BusRoot) '91'); return }
 
   $dot = [char]0x25CF; $ring = [char]0x25CB; $br = [char]0x2514
   $hr  = [string]([char]0x2500) * [Math]::Min($W - 1, 72)
@@ -493,6 +957,12 @@ function Invoke-Board {
     }
     if ($nc -gt 3) { Write-Output (Paint ("       (+{0} more pending)" -f ($nc - 3)) '90') }
   }
+
+  # Memory summary goes LAST, and inside try/catch. Both matter: $script:LastWorking / $script:LastTag
+  # are already set above, so nothing here can break the idle notification, and the board runs in an
+  # endless redraw loop - an escaping exception would kill the loop and leave a stale window that
+  # still looks alive (the worst failure mode a monitor can have).
+  try { Write-MemoryFooter -Rows $rows -Bus $BusRoot -Tag $tag } catch { }
 }
 
 # Live board: redraw on an interval in its own terminal window (Ctrl+C to exit). Clear guarded for non-console hosts.
@@ -510,7 +980,14 @@ function Invoke-BoardLoop([int]$interval, [bool]$notify) {
       if ($prevWorking -gt 0 -and $cur -eq 0) {
         $n = Join-Path $PSScriptRoot 'notify-pool-idle.ps1'
         if (Test-Path $n) {
-          try { Start-Process powershell -WindowStyle Hidden -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -Pool "{1}"' -f $n, $script:LastTag) | Out-Null } catch { }
+          # Windows only, on purpose. notify-pool-idle.ps1 draws a DESKTOP notification (System.Windows.Forms /
+          # BurntToast); on a headless server there is nobody to show it to, and spawning it would only start a
+          # process that dies on the first Windows-only assembly. Before this change the Linux path was dead by
+          # accident (no `powershell` executable) - resolving the interpreter would have quietly revived it,
+          # because the enabling sentinel `.board-notify` travels with the tool directory.
+          if ($script:OnWindows) {
+            try { Start-Process powershell -WindowStyle Hidden -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -Pool "{1}"' -f $n, $script:LastTag) | Out-Null } catch { }
+          }
         }
       }
       $prevWorking = $cur
@@ -570,8 +1047,10 @@ switch ($Cmd) {
   'claim' { Invoke-Claim $Owner $Id }
   'ack'   { Invoke-Ack   $Owner $Id }
   'dismiss' { Invoke-Dismiss $Owner $Id }
+  'ready' { Invoke-Ready $Owner }
   'check' { Invoke-Check $Owner }
   'watch' { Invoke-Watch $Owner $IntervalSeconds }
+  'monitor' { $iv = if ($PSBoundParameters.ContainsKey('IntervalSeconds')) { $IntervalSeconds } else { 20 }; Invoke-Monitor $Owner $iv }
   'hook'  { Invoke-Hook }
   'activity' { Invoke-Activity }
   'armgate' { Invoke-ArmGate }
@@ -589,5 +1068,5 @@ switch ($Cmd) {
       Invoke-BoardLoop $iv $doNotify
     } else { Invoke-Board }
   }
-  'help'  { Get-Content $PSCommandPath -TotalCount 36 }
+  'help'  { Get-Content $PSCommandPath -TotalCount 40 }   # = длина шапки-справки; растёт вместе с ней
 }
