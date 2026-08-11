@@ -27,16 +27,16 @@ $bodyf = Join-Path $Tmp ("pool-proto-body-{0}.txt" -f $PID)   # pid in the name:
 $R = @(); function A($n,$c){ $script:R += [pscustomobject]@{ t=$n; p=[bool]$c } }
 
 # --- core flow: send -> inbox -> check(fire) -> check(idempotent) -> claim -> reply -> check(architect) -> ack ---
-$id1  = (& $pool send -To backend-<sub-a> -From architect-<sub-a> -Subject SmokeOne -BodyFile $bodyf -BusRoot $bus) | Select-Object -Last 1
-$inb  = & $pool inbox -Owner backend-<sub-a> -BusRoot $bus
-$c1   = & $pool check -Owner backend-<sub-a> -BusRoot $bus
-$c2   = & $pool check -Owner backend-<sub-a> -BusRoot $bus
-$cl   = & $pool claim -Owner backend-<sub-a> -Id $id1 -BusRoot $bus
-$c3   = & $pool check -Owner backend-<sub-a> -BusRoot $bus
-$inb2 = & $pool inbox -Owner backend-<sub-a> -BusRoot $bus
-$id2  = (& $pool reply -To architect-<sub-a> -From backend-<sub-a> -Subject SmokeReply -Body ok -InReplyTo $id1 -BusRoot $bus) | Select-Object -Last 1
-$ac   = & $pool check -Owner architect-<sub-a> -BusRoot $bus
-$ak   = & $pool ack -Owner backend-<sub-a> -Id $id1 -BusRoot $bus
+$id1  = (& $pool send -To backend-sub-a -From architect-sub-a -Subject SmokeOne -BodyFile $bodyf -BusRoot $bus) | Select-Object -Last 1
+$inb  = & $pool inbox -Owner backend-sub-a -BusRoot $bus
+$c1   = & $pool check -Owner backend-sub-a -BusRoot $bus
+$c2   = & $pool check -Owner backend-sub-a -BusRoot $bus
+$cl   = & $pool claim -Owner backend-sub-a -Id $id1 -BusRoot $bus
+$c3   = & $pool check -Owner backend-sub-a -BusRoot $bus
+$inb2 = & $pool inbox -Owner backend-sub-a -BusRoot $bus
+$id2  = (& $pool reply -To architect-sub-a -From backend-sub-a -Subject SmokeReply -Body ok -InReplyTo $id1 -BusRoot $bus) | Select-Object -Last 1
+$ac   = & $pool check -Owner architect-sub-a -BusRoot $bus
+$ak   = & $pool ack -Owner backend-sub-a -Id $id1 -BusRoot $bus
 $arch = Get-ChildItem (Join-Path $bus 'archive') -Filter ($id1 + '*') -File
 $del  = [System.IO.File]::ReadAllText($arch.FullName, [System.Text.Encoding]::UTF8)
 $bytes= [System.IO.File]::ReadAllBytes($arch.FullName)
@@ -58,54 +58,84 @@ A 'cyrillic round-trips'    (($delN -ge $srcN) -and ($srcN -gt 0) -and ($del -ma
 A 'no BOM in message'       (-not ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF))
 
 # --- hook (env-driven banner; silent for non-pool sessions) ---
-& $pool send -To qa-<sub-a> -From architect-<sub-a> -Subject HookProbe -Body x -BusRoot $bus | Out-Null
-$env:AGENT_OWNER = 'qa-<sub-a>'; $env:POOL_BUS_ROOT = $bus
+& $pool send -To qa-sub-a -From architect-sub-a -Subject HookProbe -Body x -BusRoot $bus | Out-Null
+$env:AGENT_OWNER = 'qa-sub-a'; $env:POOL_BUS_ROOT = $bus
 $hk = & $pool hook
-A 'hook emits POOL INBOX'   (($hk -join "`n") -match 'qa-<sub-a>: 1 pending')
+A 'hook emits POOL INBOX'   (($hk -join "`n") -match 'qa-sub-a: 1 pending')
 $env:AGENT_OWNER = ''
 $hkS = & $pool hook
 A 'hook silent w/o owner'    ([string]::IsNullOrEmpty(($hkS -join '')))
 $env:POOL_BUS_ROOT = ''
 
+# --- карантин гашения: под intent-меткой роли ей не вбрасывают ничего ---
+# Проверяем ТРИ вещи, и третья важнее первых двух: гард обязан стоять ДО вызова Invoke-Check.
+# Если его переставить после, сторож промолчит, но реестр `seen-<owner>` уже перепишется — и
+# проглоченный разовый пинг не разбудит роль НИКОГДА. Тест структурный, потому что цикл сторожа
+# в наборе не поднять, а именно порядок здесь и есть предмет ошибки.
+$qOwner = 'quarantine-sub-a'
+& $pool send -To $qOwner -From architect-sub-a -Subject QuietProbe -Body z -BusRoot $bus | Out-Null
+$qCtl = Join-Path $bus '.control'
+if (-not (Test-Path $qCtl)) { New-Item -ItemType Directory -Force -Path $qCtl | Out-Null }
+$qIntent = Join-Path $qCtl ("shutdown-intent-{0}" -f $qOwner)
+$env:AGENT_OWNER = $qOwner; $env:POOL_BUS_ROOT = $bus
+$qBefore = & $pool hook
+[System.IO.File]::WriteAllText($qIntent, '')
+$qUnder  = & $pool hook
+$qCheck  = & $pool check -Owner $qOwner -BusRoot $bus
+Remove-Item $qIntent -Force -ErrorAction SilentlyContinue
+$qAfter  = & $pool hook
+$env:AGENT_OWNER = ''; $env:POOL_BUS_ROOT = ''
+
+$qSrc = [System.IO.File]::ReadAllText($pool, [System.Text.Encoding]::UTF8)
+$qGuards = ([regex]::Matches($qSrc, '(?m)^\s*\$qOnly = if \(Test-ShutdownQuiet \$o\)[^\r\n]*\r?\n\s*\$det = Invoke-Check \$o \$qOnly')).Count
+$qCalls  = ([regex]::Matches($qSrc, '(?m)^\s*\$det = Invoke-Check \$o \$qOnly')).Count
+$qLedger = ([regex]::Matches($qSrc, 'if \(-not \$OnlyFrom\) \{ \[System.IO.File\]::WriteAllLines')).Count
+
+A 'quarantine: banner speaks without the mark'   (($qBefore -join "`n") -match ($qOwner + ': 1 pending'))
+A 'quarantine: banner still speaks (own turn, not an inbound wake)' (($qUnder -join "`n") -match ($qOwner + ': 1 pending'))
+A 'quarantine: banner returns once mark is gone' (($qAfter  -join "`n") -match ($qOwner + ': 1 pending'))
+A 'quarantine: watchers pass the controller-only filter into the check' (($qCalls -gt 0) -and ($qGuards -eq $qCalls))
+A 'quarantine: ledger write is skipped in quarantine mode' ($qLedger -eq 1)
+A 'quarantine: direct check stays unfiltered (manual diagnostics)' (($qCheck -join "`n") -match 'WAKE')
 # --- watch fires immediately (message already present -> no Start-Sleep reached) ---
-& $pool send -To metrics-<sub-a> -From architect-<sub-a> -Subject WatchProbe -Body y -BusRoot $bus | Out-Null
-$w = & $pool watch -Owner metrics-<sub-a> -BusRoot $bus -IntervalSeconds 1
+& $pool send -To metrics-sub-a -From architect-sub-a -Subject WatchProbe -Body y -BusRoot $bus | Out-Null
+$w = & $pool watch -Owner metrics-sub-a -BusRoot $bus -IntervalSeconds 1
 $wS = ($w -join "`n")
-A 'watch fires + re-arm'    (($wS -match 'STEP 1') -and ($wS -match 'watch -Owner metrics-<sub-a>'))
-A 'watch: claim before re-arm' (($wS -match 'STEP 1[^\r\n]*claim') -and ($wS.IndexOf('claim') -ge 0) -and ($wS.IndexOf('claim') -lt $wS.IndexOf('watch -Owner metrics-<sub-a>')))
+A 'watch fires + re-arm'    (($wS -match 'STEP 1') -and ($wS -match 'watch -Owner metrics-sub-a'))
+A 'watch: claim before re-arm' (($wS -match 'STEP 1[^\r\n]*claim') -and ($wS.IndexOf('claim') -ge 0) -and ($wS.IndexOf('claim') -lt $wS.IndexOf('watch -Owner metrics-sub-a')))
 
 # --- board prints a table ---
 $bd = & $pool board -BusRoot $bus
-A 'board prints table'      ((($bd -join "`n") -match 'POOL BOARD') -and (($bd -join "`n") -match 'qa-<sub-a>'))
+A 'board prints table'      ((($bd -join "`n") -match 'POOL BOARD') -and (($bd -join "`n") -match 'qa-sub-a'))
 
 # --- board hides migration notices (from=migration) ---
-& $pool send -To listing-<sub-a> -From migration -Subject 'MIGNOTICE-HIDE-ME' -Body x -Kind notice -BusRoot $bus | Out-Null
+& $pool send -To listing-sub-a -From migration -Subject 'MIGNOTICE-HIDE-ME' -Body x -Kind notice -BusRoot $bus | Out-Null
 $bdm = & $pool board -BusRoot $bus
 A 'board hides migration note' (-not (($bdm -join "`n") -match 'MIGNOTICE-HIDE-ME'))
 
 # --- mine (personal plate: own cur/ in-progress + new/ pending) ---
-$mid = (& $pool send -To devops-<sub-a> -From architect-<sub-a> -Subject MineCur -Body z -BusRoot $bus) | Select-Object -Last 1
-& $pool claim -Owner devops-<sub-a> -Id $mid -BusRoot $bus | Out-Null                                       # -> cur
-& $pool send -To devops-<sub-a> -From architect-<sub-a> -Subject MinePending -Body z2 -BusRoot $bus | Out-Null  # -> new
-$mn  = & $pool mine -Owner devops-<sub-a> -BusRoot $bus
+$mid = (& $pool send -To devops-sub-a -From architect-sub-a -Subject MineCur -Body z -BusRoot $bus) | Select-Object -Last 1
+& $pool claim -Owner devops-sub-a -Id $mid -BusRoot $bus | Out-Null                                       # -> cur
+& $pool send -To devops-sub-a -From architect-sub-a -Subject MinePending -Body z2 -BusRoot $bus | Out-Null  # -> new
+$mn  = & $pool mine -Owner devops-sub-a -BusRoot $bus
 $mnS = ($mn -join "`n")
 A 'mine shows own cur'      (($mnS -match '1 in progress \(cur\), 1 pending \(new\)') -and ($mnS -match [regex]::Escape($mid)) -and ($mnS -match 'MineCur'))
 A 'mine shows own new'      ($mnS -match 'MinePending')
 
 # --- note channel: a message, NOT a task (hidden from board, separate inbox section, dismiss not claim/ack) ---
 # quiet note: shown under [POOL NOTE], NOT counted as pending, does NOT wake the watcher
-$nq    = (& $pool note -To note-quiet-<sub-a> -From architect-<sub-a> -Subject QuietNoteMsg -Body n1 -BusRoot $bus) | Select-Object -Last 1
-$nqInb = & $pool inbox -Owner note-quiet-<sub-a> -BusRoot $bus
-$nqChk = & $pool check -Owner note-quiet-<sub-a> -BusRoot $bus
+$nq    = (& $pool note -To note-quiet-sub-a -From architect-sub-a -Subject QuietNoteMsg -Body n1 -BusRoot $bus) | Select-Object -Last 1
+$nqInb = & $pool inbox -Owner note-quiet-sub-a -BusRoot $bus
+$nqChk = & $pool check -Owner note-quiet-sub-a -BusRoot $bus
 A 'note send returns id'    ($nq -match '^\d+-[0-9a-f]{10}$')
 A 'note in [POOL NOTE]'     ((($nqInb -join "`n") -match 'POOL NOTE') -and (($nqInb -join "`n") -match [regex]::Escape($nq)))
 A 'quiet note not pending'  (($nqInb -join "`n") -match 'clean \(0 pending\)')
 A 'quiet note no wake'      (($nqChk -join "`n") -match 'no-wake')
 
 # waking note (-Wake): DOES wake the watcher, exactly like a task
-$nw     = (& $pool note -To note-wake-<sub-a> -From architect-<sub-a> -Subject WakeNoteMsg -Body n2 -Wake -BusRoot $bus) | Select-Object -Last 1
-$nwChk  = & $pool check -Owner note-wake-<sub-a> -BusRoot $bus
-$nwChk2 = & $pool check -Owner note-wake-<sub-a> -BusRoot $bus
+$nw     = (& $pool note -To note-wake-sub-a -From architect-sub-a -Subject WakeNoteMsg -Body n2 -Wake -BusRoot $bus) | Select-Object -Last 1
+$nwChk  = & $pool check -Owner note-wake-sub-a -BusRoot $bus
+$nwChk2 = & $pool check -Owner note-wake-sub-a -BusRoot $bus
 A 'waking note wakes'       (($nwChk  -join "`n") -match 'WAKE')
 A 'waking note one-shot'    (($nwChk2 -join "`n") -match 'no-wake')
 
@@ -114,68 +144,68 @@ $bdn = & $pool board -BusRoot $bus
 A 'board hides notes'       (-not (($bdn -join "`n") -match 'QuietNoteMsg|WakeNoteMsg'))
 
 # task + note coexist for one owner: pending counts only the task; the note is shown separately
-& $pool send -To note-mix-<sub-a> -From architect-<sub-a> -Subject MixTask -Body t -BusRoot $bus | Out-Null
-& $pool note -To note-mix-<sub-a> -From architect-<sub-a> -Subject MixNote -Body n -BusRoot $bus | Out-Null
-$mix = ((& $pool inbox -Owner note-mix-<sub-a> -BusRoot $bus) -join "`n")
-A 'note no inflate pending' (($mix -match 'note-mix-<sub-a>: 1 pending') -and ($mix -match 'POOL NOTE'))
+& $pool send -To note-mix-sub-a -From architect-sub-a -Subject MixTask -Body t -BusRoot $bus | Out-Null
+& $pool note -To note-mix-sub-a -From architect-sub-a -Subject MixNote -Body n -BusRoot $bus | Out-Null
+$mix = ((& $pool inbox -Owner note-mix-sub-a -BusRoot $bus) -join "`n")
+A 'note no inflate pending' (($mix -match 'note-mix-sub-a: 1 pending') -and ($mix -match 'POOL NOTE'))
 
 # dismiss clears a note in one step (new/ -> archive); inbox shows no note afterwards
-$nd     = (& $pool note -To note-dismiss-<sub-a> -From architect-<sub-a> -Subject DismissMe -Body d -BusRoot $bus) | Select-Object -Last 1
-$dis    = ((& $pool dismiss -Owner note-dismiss-<sub-a> -Id $nd -BusRoot $bus) -join "`n")
-$ndInb  = ((& $pool inbox -Owner note-dismiss-<sub-a> -BusRoot $bus) -join "`n")
+$nd     = (& $pool note -To note-dismiss-sub-a -From architect-sub-a -Subject DismissMe -Body d -BusRoot $bus) | Select-Object -Last 1
+$dis    = ((& $pool dismiss -Owner note-dismiss-sub-a -Id $nd -BusRoot $bus) -join "`n")
+$ndInb  = ((& $pool inbox -Owner note-dismiss-sub-a -BusRoot $bus) -join "`n")
 $ndArch = Get-ChildItem (Join-Path $bus 'archive') -Filter ($nd + '*') -File
 A 'dismiss note->archive'   (($dis -match 'DISMISSED') -and ($ndArch) -and (-not ($ndInb -match 'POOL NOTE')))
 
 # --- watcher liveness on the board: w on (fresh lock) / w off (no lock) / w stale (old lock) + header count ---
 # Locks placed by hand: a real `watch` fires instantly here (message already present) and deletes its own lock.
 $wd = Join-Path $bus '.watch'; [System.IO.Directory]::CreateDirectory($wd) | Out-Null
-[System.IO.File]::WriteAllText((Join-Path $wd 'lock-backend-<sub-a>.txt'), (Get-Date).ToString('o'), (New-Object System.Text.ASCIIEncoding))  # fresh -> on
-$lkStale = Join-Path $wd 'lock-architect-<sub-a>.txt'
+[System.IO.File]::WriteAllText((Join-Path $wd 'lock-backend-sub-a.txt'), (Get-Date).ToString('o'), (New-Object System.Text.ASCIIEncoding))  # fresh -> on
+$lkStale = Join-Path $wd 'lock-architect-sub-a.txt'
 [System.IO.File]::WriteAllText($lkStale, 'x', (New-Object System.Text.ASCIIEncoding))
 (Get-Item $lkStale).LastWriteTime = (Get-Date).AddSeconds(-600)                                                                          # old -> stale
 $bd  = & $pool board -BusRoot $bus            # re-capture so the sample output below shows the watcher column
 $bdS = ($bd -join "`n")
-A 'board w on (fresh lock)'  ($bdS -match 'backend-<sub-a>[^\r\n]*w on')
-A 'board w off (no lock)'    ($bdS -match 'qa-<sub-a>[^\r\n]*w off')
-A 'board w stale (old lock)' ($bdS -match 'architect-<sub-a>[^\r\n]*w stale')
+A 'board w on (fresh lock)'  ($bdS -match 'backend-sub-a[^\r\n]*w on')
+A 'board w off (no lock)'    ($bdS -match 'qa-sub-a[^\r\n]*w off')
+A 'board w stale (old lock)' ($bdS -match 'architect-sub-a[^\r\n]*w stale')
 A 'board header counts armed'($bdS -match '\b1/\d+ watchers\b')
 
 # --- activity tracking on the board: busy (UserPromptSubmit) / sub<N> (SubagentStart) / idle (Stop) ---
 # `activity` is a hook command; here we feed payloads via -Body (the real hook reads them from stdin).
-& $pool send -To act-<sub-a> -From architect-<sub-a> -Subject ActSeed -Body x -BusRoot $bus | Out-Null   # give act-<sub-a> a board row
-& $pool activity -Owner act-<sub-a> -Body '{"hook_event_name":"UserPromptSubmit"}' -BusRoot $bus | Out-Null
+& $pool send -To act-sub-a -From architect-sub-a -Subject ActSeed -Body x -BusRoot $bus | Out-Null   # give act-<sub-a> a board row
+& $pool activity -Owner act-sub-a -Body '{"hook_event_name":"UserPromptSubmit"}' -BusRoot $bus | Out-Null
 $bAct1 = ((& $pool board -BusRoot $bus) -join "`n")
-A 'activity busy on prompt'  ($bAct1 -match 'act-<sub-a>[^\r\n]*act busy')
-& $pool activity -Owner act-<sub-a> -Body '{"hook_event_name":"SubagentStart","agent_id":"s1"}' -BusRoot $bus | Out-Null
-& $pool activity -Owner act-<sub-a> -Body '{"hook_event_name":"SubagentStart","agent_id":"s2"}' -BusRoot $bus | Out-Null
+A 'activity busy on prompt'  ($bAct1 -match 'act-sub-a[^\r\n]*act busy')
+& $pool activity -Owner act-sub-a -Body '{"hook_event_name":"SubagentStart","agent_id":"s1"}' -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a -Body '{"hook_event_name":"SubagentStart","agent_id":"s2"}' -BusRoot $bus | Out-Null
 $bAct2 = ((& $pool board -BusRoot $bus) -join "`n")
-A 'activity counts subagents' ($bAct2 -match 'act-<sub-a>[^\r\n]*act sub2')
+A 'activity counts subagents' ($bAct2 -match 'act-sub-a[^\r\n]*act sub2')
 # Stop must NOT drop live sub-markers: background subagents outlive the parent turn, so the board stays sub2 (not idle)
-& $pool activity -Owner act-<sub-a> -Body '{"hook_event_name":"Stop"}' -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a -Body '{"hook_event_name":"Stop"}' -BusRoot $bus | Out-Null
 $bAct3 = ((& $pool board -BusRoot $bus) -join "`n")
-A 'stop keeps live sub markers' ($bAct3 -match 'act-<sub-a>[^\r\n]*act sub2')
-$subLive = @(Get-ChildItem (Join-Path (Join-Path $bus '.activity') 'act-<sub-a>') -Filter 'sub-*' -File -ErrorAction SilentlyContinue).Count
+A 'stop keeps live sub markers' ($bAct3 -match 'act-sub-a[^\r\n]*act sub2')
+$subLive = @(Get-ChildItem (Join-Path (Join-Path $bus '.activity') 'act-sub-a') -Filter 'sub-*' -File -ErrorAction SilentlyContinue).Count
 A 'live markers survive stop'   ($subLive -eq 2)
 # subagents finish -> SubagentStop drops markers -> board falls back to the idle state Stop set above
-& $pool activity -Owner act-<sub-a> -Body '{"hook_event_name":"SubagentStop","agent_id":"s1"}' -BusRoot $bus | Out-Null
-& $pool activity -Owner act-<sub-a> -Body '{"hook_event_name":"SubagentStop","agent_id":"s2"}' -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a -Body '{"hook_event_name":"SubagentStop","agent_id":"s1"}' -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a -Body '{"hook_event_name":"SubagentStop","agent_id":"s2"}' -BusRoot $bus | Out-Null
 $bAct4 = ((& $pool board -BusRoot $bus) -join "`n")
-A 'idle after last subagent'    ($bAct4 -match 'act-<sub-a>[^\r\n]*act idle')
+A 'idle after last subagent'    ($bAct4 -match 'act-sub-a[^\r\n]*act idle')
 # orphan backstop: a stale marker (>2h, missed SubagentStop) is swept on the next UserPromptSubmit; live markers stay
-$stale = Join-Path (Join-Path (Join-Path $bus '.activity') 'act-<sub-a>') 'sub-orphan'
+$stale = Join-Path (Join-Path (Join-Path $bus '.activity') 'act-sub-a') 'sub-orphan'
 [System.IO.File]::WriteAllText($stale, '')
 (Get-Item $stale).LastWriteTime = (Get-Date).AddHours(-3)
-& $pool activity -Owner act-<sub-a> -Body '{"hook_event_name":"SubagentStart","agent_id":"live1"}' -BusRoot $bus | Out-Null
-& $pool activity -Owner act-<sub-a> -Body '{"hook_event_name":"UserPromptSubmit"}' -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a -Body '{"hook_event_name":"SubagentStart","agent_id":"live1"}' -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a -Body '{"hook_event_name":"UserPromptSubmit"}' -BusRoot $bus | Out-Null
 A 'orphan marker swept'         (-not (Test-Path $stale))
-A 'fresh marker kept on sweep'  (Test-Path (Join-Path (Join-Path (Join-Path $bus '.activity') 'act-<sub-a>') 'sub-live1'))
-Remove-Item (Join-Path (Join-Path (Join-Path $bus '.activity') 'act-<sub-a>') 'sub-live1') -Force -ErrorAction SilentlyContinue
+A 'fresh marker kept on sweep'  (Test-Path (Join-Path (Join-Path (Join-Path $bus '.activity') 'act-sub-a') 'sub-live1'))
+Remove-Item (Join-Path (Join-Path (Join-Path $bus '.activity') 'act-sub-a') 'sub-live1') -Force -ErrorAction SilentlyContinue
 
 # --- shutdown-ready invalidation: an AGENT turn must clear it, a MACHINE wake must not (incident 2026-07-27) ---
 # The harness delivers a finished background task (one-shot watcher fired and exited; superseded sentinel died)
 # through the same prompt queue as human input -> new promptId -> this hook. Blind wiping killed the readiness
 # flag seconds after the agent created it. The turn text carries <task-notification>, so the two are separable.
-$rdyOwner = 'act-<sub-a>'
+$rdyOwner = 'act-sub-a'
 $rdyFlag  = Join-Path (Join-Path $bus '.control') ("shutdown-ready-{0}" -f $rdyOwner)   # in the POOL BUS, not the shared ~\.claude\.control
 [void][System.IO.Directory]::CreateDirectory((Split-Path $rdyFlag -Parent))
   function Set-RdyFlag { [System.IO.File]::WriteAllText($rdyFlag, '') }
@@ -208,12 +238,12 @@ $rdyFlag  = Join-Path (Join-Path $bus '.control') ("shutdown-ready-{0}" -f $rdyO
   Remove-Item $otherBus -Recurse -Force -ErrorAction SilentlyContinue
 
 # drive a few owners into distinct states purely so the sample board below showcases the new columns
-& $pool activity -Owner act-<sub-a>     -Body '{"hook_event_name":"UserPromptSubmit"}'                  -BusRoot $bus | Out-Null
-& $pool activity -Owner act-<sub-a>     -Body '{"hook_event_name":"SubagentStart","agent_id":"d1"}'     -BusRoot $bus | Out-Null
-& $pool activity -Owner act-<sub-a>     -Body '{"hook_event_name":"SubagentStart","agent_id":"d2"}'     -BusRoot $bus | Out-Null
-& $pool activity -Owner backend-<sub-a> -Body '{"hook_event_name":"UserPromptSubmit"}'                  -BusRoot $bus | Out-Null
-& $pool activity -Owner qa-<sub-a>      -Body '{"hook_event_name":"UserPromptSubmit"}'                  -BusRoot $bus | Out-Null
-& $pool activity -Owner qa-<sub-a>      -Body '{"hook_event_name":"Stop"}'                              -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a     -Body '{"hook_event_name":"UserPromptSubmit"}'                  -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a     -Body '{"hook_event_name":"SubagentStart","agent_id":"d1"}'     -BusRoot $bus | Out-Null
+& $pool activity -Owner act-sub-a     -Body '{"hook_event_name":"SubagentStart","agent_id":"d2"}'     -BusRoot $bus | Out-Null
+& $pool activity -Owner backend-sub-a -Body '{"hook_event_name":"UserPromptSubmit"}'                  -BusRoot $bus | Out-Null
+& $pool activity -Owner qa-sub-a      -Body '{"hook_event_name":"UserPromptSubmit"}'                  -BusRoot $bus | Out-Null
+& $pool activity -Owner qa-sub-a      -Body '{"hook_event_name":"Stop"}'                              -BusRoot $bus | Out-Null
 $bd = & $pool board -BusRoot $bus
 
 # --- Stop-hook ARM-GATE: env-gated. Run as a SEPARATE process (as the real hook does) so `exit 2` (block) does
@@ -250,23 +280,23 @@ function ArmGateExit([string]$owner, [string]$payload = '') {
   return $p.ExitCode
 }
 $env:POOL_WATCHER = ''                                                                     # opt-out -> instant no-op
-A 'armgate no-op without opt-in'      ((ArmGateExit 'ag-off-<sub-a>') -eq 0)
+A 'armgate no-op without opt-in'      ((ArmGateExit 'ag-off-sub-a') -eq 0)
 $env:POOL_WATCHER = '1'
-A 'armgate blocks when no watcher'    ((ArmGateExit 'ag-a-<sub-a>') -eq 2)
+A 'armgate blocks when no watcher'    ((ArmGateExit 'ag-a-sub-a') -eq 2)
 # REGRESSION (incident 2026-07-27): the 2nd Stop must STILL block. A watcher that armed, fired on a pending task
 # and exited is indistinguishable from a broken spawn by elapsed time - the old <30s window let this pass silently
 # and left the session with no watcher at all. Backoff now counts blocks, so it takes the cap (2) to step aside.
-A 'armgate re-blocks after dead arm'  ((ArmGateExit 'ag-a-<sub-a>') -eq 2)
-A 'armgate backs off past the cap'    ((ArmGateExit 'ag-a-<sub-a>') -eq 0)
-A 'armgate notes its disengage'       (@(Get-ChildItem (Join-Path (Join-Path $bus 'ag-a-<sub-a>') 'new') -Filter '*.note.md' -File -ErrorAction SilentlyContinue).Count -eq 1)
-A 'armgate notes only once'           (@(Get-ChildItem (Join-Path (Join-Path $bus 'ag-a-<sub-a>') 'new') -Filter '*.note.md' -File -ErrorAction SilentlyContinue).Count -eq 1 -and (ArmGateExit 'ag-a-<sub-a>') -eq 0)
-A 'armgate ignores SubagentStop'      ((ArmGateExit 'ag-b-<sub-a>' '{"hook_event_name":"SubagentStop"}') -eq 0)
+A 'armgate re-blocks after dead arm'  ((ArmGateExit 'ag-a-sub-a') -eq 2)
+A 'armgate backs off past the cap'    ((ArmGateExit 'ag-a-sub-a') -eq 0)
+A 'armgate notes its disengage'       (@(Get-ChildItem (Join-Path (Join-Path $bus 'ag-a-sub-a') 'new') -Filter '*.note.md' -File -ErrorAction SilentlyContinue).Count -eq 1)
+A 'armgate notes only once'           (@(Get-ChildItem (Join-Path (Join-Path $bus 'ag-a-sub-a') 'new') -Filter '*.note.md' -File -ErrorAction SilentlyContinue).Count -eq 1 -and (ArmGateExit 'ag-a-sub-a') -eq 0)
+A 'armgate ignores SubagentStop'      ((ArmGateExit 'ag-b-sub-a' '{"hook_event_name":"SubagentStop"}') -eq 0)
 $agWd = Join-Path $bus '.watch'; [System.IO.Directory]::CreateDirectory($agWd) | Out-Null
 $myTicks = if ($OnWin) { (Get-Process -Id $PID).StartTime.Ticks } else { 0 }   # see note: 0 = skip identity, assert on liveness
-[System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-live-<sub-a>.txt'), ('{0}|{1}|{2}' -f $PID, $myTicks, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
-A 'armgate allows on live watcher'    ((ArmGateExit 'ag-live-<sub-a>') -eq 0)
-[System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-dead-<sub-a>.txt'), ('{0}|{1}|{2}' -f 999999999, 1, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
-A 'armgate blocks on dead-pid lock'   ((ArmGateExit 'ag-dead-<sub-a>') -eq 2)
+[System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-live-sub-a.txt'), ('{0}|{1}|{2}' -f $PID, $myTicks, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
+A 'armgate allows on live watcher'    ((ArmGateExit 'ag-live-sub-a') -eq 0)
+[System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-dead-sub-a.txt'), ('{0}|{1}|{2}' -f 999999999, 1, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
+A 'armgate blocks on dead-pid lock'   ((ArmGateExit 'ag-dead-sub-a') -eq 2)
 # REGRESSION (opponent review of the Linux port, 2026-08-04): 5.1 returns $null - NOT a throw - for the StartTime
 # of a process it may not inspect (measured: 143 of 474 pids on this box - System, csrss, svchost, AV). An identity
 # check that reads "cannot tell" as "skip the check" turns a RECYCLED pid in a stale monitor lock into "watcher
@@ -274,27 +304,27 @@ A 'armgate blocks on dead-pid lock'   ((ArmGateExit 'ag-dead-<sub-a>') -eq 2)
 # gate exists to prevent. A monitor never deletes its lock, so stale locks are the NORMAL state after an abrupt end.
 $opaque = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $null -eq (Get-Process -Id $_.Id -ErrorAction SilentlyContinue).StartTime } | Select-Object -First 1)
 if ($opaque.Count -eq 1) {
-  [System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-opaque-<sub-a>.txt'), ('{0}|{1}|{2}' -f $opaque[0].Id, 123456789, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
-  A 'armgate blocks on a pid with unreadable StartTime' ((ArmGateExit 'ag-opaque-<sub-a>') -eq 2)
+  [System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-opaque-sub-a.txt'), ('{0}|{1}|{2}' -f $opaque[0].Id, 123456789, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
+  A 'armgate blocks on a pid with unreadable StartTime' ((ArmGateExit 'ag-opaque-sub-a') -eq 2)
 }
 # REGRESSION, identity of the watcher process. Two halves, and BOTH are needed because every other fixture in
 # this file writes the stamp with the same process that later reads it - a stamp that only ever agrees with
 # itself passes them all. That is exactly how the Linux defect survived: there .NET derives StartTime from a
 # floating boot time, so two readers of the SAME pid get different values and the gate calls a live watcher dead.
 # (a) mismatch on a LIVE pid must BLOCK - this is the pid-reuse guard, and it is the half a platform port breaks.
-[System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-stamp-<sub-a>.txt'), ('{0}|{1}|{2}' -f $PID, 1, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
-A 'armgate blocks on a live pid with a wrong stamp' ((ArmGateExit 'ag-stamp-<sub-a>') -eq 2)
+[System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-stamp-sub-a.txt'), ('{0}|{1}|{2}' -f $PID, 1, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
+A 'armgate blocks on a live pid with a wrong stamp' ((ArmGateExit 'ag-stamp-sub-a') -eq 2)
 # (b) a lock written by a REAL watcher process must be ACCEPTED by the gate - cross-process, which is the only
 # comparison that happens in the field. Uses `monitor` (the primary arming path), not the one-shot `watch`.
 $xpOut  = Join-Path $Tmp ('agxp-out-' + [Guid]::NewGuid().ToString('N') + '.txt')
 $xpErr  = Join-Path $Tmp ('agxp-err-' + [Guid]::NewGuid().ToString('N') + '.txt')
-$xpArgs = $PSFlg + @('-File',$pool,'monitor','-Owner','ag-xproc-<sub-a>','-BusRoot',$bus,'-IntervalSeconds','30')
+$xpArgs = $PSFlg + @('-File',$pool,'monitor','-Owner','ag-xproc-sub-a','-BusRoot',$bus,'-IntervalSeconds','30')
 $xp     = Start-Process $PSExe -ArgumentList $xpArgs -PassThru -NoNewWindow -RedirectStandardOutput $xpOut -RedirectStandardError $xpErr
-$xpLock = Join-Path $agWd 'lock-ag-xproc-<sub-a>.txt'
+$xpLock = Join-Path $agWd 'lock-ag-xproc-sub-a.txt'
 $xpTill = (Get-Date).AddSeconds(15)                              # generous: a cold PowerShell start is ~1s, a loaded box slower
 while (-not (Test-Path $xpLock) -and (Get-Date) -lt $xpTill) { Start-Sleep -Milliseconds 200 }
 $xpLockOk = Test-Path $xpLock
-$xpExit   = if ($xpLockOk) { ArmGateExit 'ag-xproc-<sub-a>' } else { -1 }
+$xpExit   = if ($xpLockOk) { ArmGateExit 'ag-xproc-sub-a' } else { -1 }
 $xpOk     = $xpLockOk -and ($xpExit -eq 0)
 A 'armgate accepts a lock written by a real watcher process' $xpOk
 if (-not $xpOk) {
@@ -314,12 +344,12 @@ Stop-Process -Id $xp.Id -Force -ErrorAction SilentlyContinue
 if ($xpOk) { Remove-Item $xpOut, $xpErr, $xpLock -Force -ErrorAction SilentlyContinue }
 # The block counter must RESET once the gate sees a live watcher, otherwise a pool that recovers stays one Stop
 # away from a permanent disengage. Block once, recover, then the next failure must block again from scratch.
-$rstLock = Join-Path $agWd 'lock-ag-rst-<sub-a>.txt'
-A 'armgate blocks (reset case)'       ((ArmGateExit 'ag-rst-<sub-a>') -eq 2)
+$rstLock = Join-Path $agWd 'lock-ag-rst-sub-a.txt'
+A 'armgate blocks (reset case)'       ((ArmGateExit 'ag-rst-sub-a') -eq 2)
 [System.IO.File]::WriteAllText($rstLock, ('{0}|{1}|{2}' -f $PID, $myTicks, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
-A 'armgate allows, clearing counter'  ((ArmGateExit 'ag-rst-<sub-a>') -eq 0)
+A 'armgate allows, clearing counter'  ((ArmGateExit 'ag-rst-sub-a') -eq 0)
 Remove-Item $rstLock -Force -ErrorAction SilentlyContinue
-A 'armgate blocks again after reset'  ((ArmGateExit 'ag-rst-<sub-a>') -eq 2)
+A 'armgate blocks again after reset'  ((ArmGateExit 'ag-rst-sub-a') -eq 2)
 
 # --- regression (field defect, <pool-a> 30-31.07: six crashes across four roles in two days). The heartbeat lock
 # is a CONTENDED file, and the old code lost on both ends. Writer: Set-Content threw and killed the whole watcher -
@@ -329,27 +359,27 @@ A 'armgate blocks again after reset'  ((ArmGateExit 'ag-rst-<sub-a>') -eq 2)
 # prior watcher (it reads pid 0 / nothing), so the owner ends up with TWO live watchers writing one file.
 # Now: content is written once and only the mtime is touched per cycle, the writer shares Read, the reader shares
 # ReadWrite, and a failed beat is survivable. ---
-$hbLock = Join-Path $agWd 'lock-ag-hb-<sub-a>.txt'
+$hbLock = Join-Path $agWd 'lock-ag-hb-sub-a.txt'
 [System.IO.File]::WriteAllText($hbLock, ('{0}|{1}|{2}' -f $PID, $myTicks, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
 $hbFs = New-Object System.IO.FileStream($hbLock, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)  # exactly how a live watcher holds it
-$hbExit = ArmGateExit 'ag-hb-<sub-a>'
+$hbExit = ArmGateExit 'ag-hb-sub-a'
 $hbFs.Dispose()
 A 'armgate reads a lock held by a writer' ($hbExit -eq 0)
-[System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-empty-<sub-a>.txt'), '', (New-Object System.Text.ASCIIEncoding))
-A 'armgate blocks on a zero-byte lock'    ((ArmGateExit 'ag-empty-<sub-a>') -eq 2)
+[System.IO.File]::WriteAllText((Join-Path $agWd 'lock-ag-empty-sub-a.txt'), '', (New-Object System.Text.ASCIIEncoding))
+A 'armgate blocks on a zero-byte lock'    ((ArmGateExit 'ag-empty-sub-a') -eq 2)
 # Writer side: the watcher must SURVIVE a lock it cannot write, and must not leave a truncated one behind.
 # The fixture differs by platform because "unwritable" does. Windows: a FileShare::None handle. Linux has no
 # mandatory locking - an open handle stops nobody, the watcher fired, deleted the lock (it does that on WAKE)
 # and the read below then killed the WHOLE run, so everything after this point never executed on the server.
 # There the fixture is a read-only DIRECTORY: deletion and creation are governed by the directory, not the
 # file, so this is what actually makes a lock unwritable on that platform. Rights are restored immediately.
-& $pool send -To hb-lock-<sub-a> -From architect-<sub-a> -Subject HbProbe -Body z -BusRoot $bus | Out-Null
-$hbBusy = Join-Path $agWd 'lock-hb-lock-<sub-a>.txt'
+& $pool send -To hb-lock-sub-a -From architect-sub-a -Subject HbProbe -Body z -BusRoot $bus | Out-Null
+$hbBusy = Join-Path $agWd 'lock-hb-lock-sub-a.txt'
 [System.IO.File]::WriteAllText($hbBusy, ('{0}|{1}|{2}' -f 999999999, 1, (Get-Date).ToString('o')), (New-Object System.Text.ASCIIEncoding))
 $hbBusyFs = $null
 if ($OnWin) { $hbBusyFs = New-Object System.IO.FileStream($hbBusy, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None) }
 else        { & chmod 500 $agWd | Out-Null }
-$hbW = ((& $pool watch -Owner hb-lock-<sub-a> -BusRoot $bus -IntervalSeconds 1) -join "`n")
+$hbW = ((& $pool watch -Owner hb-lock-sub-a -BusRoot $bus -IntervalSeconds 1) -join "`n")
 if ($OnWin) { $hbBusyFs.Dispose() } else { & chmod 700 $agWd | Out-Null }
 # Never let a fixture abort the run: a missing file here is a FAILED check, not a dead test session.
 $hbAfter = ''
@@ -373,8 +403,8 @@ function HookSurvivesOpenStdin([string]$cmd, [string]$owner, [int]$waitMs = 1500
   if (-not $done) { try { $p.Kill() } catch { } }
   return $done
 }
-A 'armgate survives open stdin'       (HookSurvivesOpenStdin 'armgate' 'ag-stdin-<sub-a>')
-A 'activity survives open stdin'      (HookSurvivesOpenStdin 'activity' 'ag-stdin-<sub-a>')
+A 'armgate survives open stdin'       (HookSurvivesOpenStdin 'armgate' 'ag-stdin-sub-a')
+A 'activity survives open stdin'      (HookSurvivesOpenStdin 'activity' 'ag-stdin-sub-a')
 
 # --- regression: a watcher needs ~1s of PowerShell startup before it writes its first lock, and the agent arms and
 # THEN stops - so the gate routinely runs while the arm is still booting. Reading that as "no watcher" made the agent
@@ -397,13 +427,13 @@ Set-Content -Path $stub -Encoding ASCII -Value @(
 )
 $fwOut  = Join-Path $Tmp ('agfw-out-' + [Guid]::NewGuid().ToString('N') + '.txt')
 $fwErr  = Join-Path $Tmp ('agfw-err-' + [Guid]::NewGuid().ToString('N') + '.txt')
-$fwArgs = $PSFlg + @('-File',$stub,'watch','-Owner','ag-flight-<sub-a>','-BusRoot',$bus)
+$fwArgs = $PSFlg + @('-File',$stub,'watch','-Owner','ag-flight-sub-a','-BusRoot',$bus)
 # Output captured, not thrown away: an arm that fails to START is indistinguishable from one the gate refused,
 # and that is exactly the ambiguity that cost a round-trip to the server.
 if ($OnWin) { $fw = Start-Process $PSExe -ArgumentList $fwArgs -PassThru -WindowStyle Hidden -RedirectStandardOutput $fwOut -RedirectStandardError $fwErr }
 else        { $fw = Start-Process $PSExe -ArgumentList $fwArgs -PassThru -NoNewWindow -RedirectStandardOutput $fwOut -RedirectStandardError $fwErr }
 Start-Sleep -Milliseconds 400                                              # let the stub exist; its lock is still 2.1s away
-$fwExit = ArmGateExit 'ag-flight-<sub-a>'
+$fwExit = ArmGateExit 'ag-flight-sub-a'
 $fwOk   = ($fwExit -eq 0)
 A 'armgate allows an arm in flight'   $fwOk
 if (-not $fwOk) {
@@ -423,7 +453,7 @@ $env:POOL_WATCHER = ''
 # to the pre-2026-07-27 global path. The controller never saw it -> silent TIMEOUT. The flag address is now
 # the script's business, not the agent's. Guards matter as much as the flag: it authorizes a KILL, so it must
 # refuse to exist without a live intent and a controller task the agent actually took.
-$rdyO   = 'ready-probe-<sub-a>'
+$rdyO   = 'ready-probe-sub-a'
 $rdyCtl = Join-Path $bus '.control'
 $rdyFlg = Join-Path $rdyCtl ('shutdown-ready-' + $rdyO)
 $rdyInt = Join-Path $rdyCtl ('shutdown-intent-' + $rdyO)
@@ -446,7 +476,7 @@ A 'ready flag lands in the POOL bus, not global' (($r3 -join "`n") -match [regex
 A 'ready is idempotent'                      ((& $pool ready -Owner $rdyO -BusRoot $bus) -join "`n") -match 'READY:'
 
 # A task older than the intent must not count: it proves nothing about THIS shutdown cycle.
-$rdyO2 = 'ready-stale-<sub-a>'
+$rdyO2 = 'ready-stale-sub-a'
 $stCtl = Join-Path $bus '.control'
 [System.IO.File]::WriteAllText((Join-Path $stCtl ('shutdown-intent-' + $rdyO2)), '')
 $stCur = Join-Path (Join-Path $bus $rdyO2) 'cur'

@@ -1,6 +1,6 @@
 """remote-bridge: Telegram <-> живая Claude-сессия в режиме УДАЛЁННОГО ПУЛЬТА.
 
-Пишет ТОЛЬКО доверенный владелец в личку (модель доверия инвертирована vs модели группового чата,
+Пишет ТОЛЬКО доверенный владелец в личку (модель доверия инвертирована vs <pool-a>,
 где ~15 недоверенных людей в группе). Гард = один числовой user_id (allowlist-of-one),
 с TOFU (первое ЛС фиксирует владельца). Каждое сообщение владельца будит цель.
 
@@ -10,7 +10,7 @@ Exit codes: 0 — штатно (Ctrl+C); 1 — нештатный сбой (runn
 Токен «не задан» -> движок ЖДЁТ (лог+backoff), НЕ падает и НЕ спамит.
 
 Модель доверия: гард пропускает только владельца, поэтому его сообщения — РАСПОРЯЖЕНИЯ
-цели (не «недоверенный ввод», как в групповом чате). Сам движок текст не интерпретирует —
+цели (не «недоверенный ввод», как в <pool-a>). Сам движок текст не интерпретирует —
 не eval'ит и не подставляет в shell/пути/SQL: это свойство транспорта, а не цензура
 владельца. ПОСЛАБЛЕНИЕ в парсинге: закрытый словарь управляющих входов (слэш-команды +
 callback_data), но ТОЛЬКО от аутентифицированного владельца и ТОЛЬКО по точному
@@ -269,9 +269,13 @@ def transcribe_voice(rec: dict, cfg: dict) -> None:
     text, provider_name = stt_provider.transcribe(B.DATA / v["path"], cfg)
     if text is None:
         return
+    # Метку берём ИЗ rec, а не перечитываем состояние: между записью голосового и ответом
+    # STT проходят секунды, за которые владелец успевает нажать /switch — и тогда текст
+    # голосового уехал бы другой роли, а исходной осталась бы пустышка «transcript=нет».
     B.journal_append(B.INBOX_DIR / f"{B.today()}.jsonl", {
         "ts": B.now_iso(),
         "update_id": rec["update_id"],
+        "target": rec.get("target"),
         "kind": "voice_transcript",
         "chat": rec["chat"],
         "from": rec["from"],
@@ -301,9 +305,15 @@ def fetch_voice(token: str, rec: dict) -> None:
 
 # ----------------------------------------------------------------------- wake
 
-def scan_unread(cursor_uid: int) -> tuple[int, int]:
+def scan_unread(cursor_uid: int, cfg: dict | None = None,
+                target: str | None = None) -> tuple[int, int]:
     """(count, max_update_id) непрочитанных записей основного inbox (карантин мимо),
-    дедуп по update_id (voice_transcript делит update_id с оригиналом -> считается раз)."""
+    дедуп по update_id (voice_transcript делит update_id с оригиналом -> считается раз).
+
+    При включённой адресной ленте считаем только адресованное ЦЕЛИ: иначе побудка
+    докладывает «unread=23», а цель, прочитав, видит «новых нет», и условие догона
+    `cursor >= tail_at_wake` не выполняется больше никогда — дебаунс начинает давить
+    первое же сообщение после простоя, ради которого тихий старт и делался."""
     seen: set[int] = set()
     count = 0
     max_uid = cursor_uid
@@ -323,6 +333,8 @@ def scan_unread(cursor_uid: int) -> tuple[int, int]:
             uid = r.get("update_id", 0)
             if uid <= cursor_uid or uid in seen:
                 continue
+            if not B.rec_visible_to(r, cfg or {}, target):
+                continue
             seen.add(uid)
             count += 1
             if uid > max_uid:
@@ -333,8 +345,14 @@ def scan_unread(cursor_uid: int) -> tuple[int, int]:
 def should_wake(tail: int, cursor: int, wake_state: dict,
                 debounce_s: float, now: float) -> bool:
     """«Тихий старт»: первое сообщение после того, как цель догнала журнал, будит
-    сразу; дебаунс давит только последующие wake-note, пока цель отстаёт."""
+    сразу; дебаунс давит только последующие wake-note, пока цель отстаёт.
+    Идемпотентность (баг 001-b): если с прошлого wake-note НОВОГО не пришло
+    (tail не сдвинулся дальше tail_at_wake), НЕ будим — иначе цель, которая по
+    роли не читает сырьё (курсор не двигается), ре-нагалась бы каждые debounce_s
+    бесконечно."""
     if tail <= cursor:
+        return False
+    if tail <= wake_state.get("tail_at_wake", 0):
         return False
     caught_up_since_wake = cursor >= wake_state.get("tail_at_wake", 0)
     if not caught_up_since_wake \
@@ -357,16 +375,18 @@ def maybe_wake(cfg: dict, manifest: dict | None, force: bool = False) -> None:
     канал — chat_sentinel. В сигнал идут ТОЛЬКО числа/причина, НИКАКОГО контента."""
     if cfg.get("mode") != "pool":
         return
-    cursor = B.read_json(_state("target-cursor.json"), {}).get("last_update_id", 0)
-    count, max_uid = scan_unread(cursor)
+    # Цель резолвим ДО подсчёта: при адресной ленте и курсор, и счётчик — её собственные.
+    target = B.read_current_target(default_target(cfg, manifest))
+    if not target:
+        return
+    cursor = B.read_json(B.cursor_path(cfg, target if B.per_target_inbox(cfg) else None),
+                         {}).get("last_update_id", 0)
+    count, max_uid = scan_unread(cursor, cfg, target)
     if count == 0:
         return
     wake_state = B.read_json(_state("wake.json"), {})
     now = time.time()
     if not (force or should_wake(max_uid, cursor, wake_state, cfg["wake_debounce_s"], now)):
-        return
-    target = B.read_current_target(default_target(cfg, manifest))
-    if not target:
         return
     reason = "new-degraded" if force else "new"
     cmd = [
@@ -375,7 +395,7 @@ def maybe_wake(cfg: dict, manifest: dict | None, force: bool = False) -> None:
         "-To", target, "-From", "bridge", "-Wake",
         "-Subject", f"bridge: {count} new message(s)",
         "-Body", (f"unread={count} reason={reason}. Run: python "
-                  r"<workspace-root>\.launcher\pool-bus\remote-bridge\tools\read_inbox.py"),
+                  r"C:\workspace-root\.launcher\pool-bus\remote-bridge\tools\read_inbox.py"),
         "-BusRoot", str(B.BUS_ROOT),
     ]
     try:
@@ -508,6 +528,11 @@ def process_updates(token: str, cfg: dict, updates: list[dict], bot: dict,
             fetch_voice(token, rec)
         if rec.get("document"):
             fetch_document(token, rec)
+        # Метка адресата ставится В МОМЕНТ ПРИХОДА и потом не меняется — это и есть
+        # требование владельца: /switch делит поток по времени, а не перекидывает историю.
+        # Пишем всегда (в solo безвредно: читатель метку игнорирует, пока флаг выключен).
+        if state.get("current_target"):
+            rec["target"] = state["current_target"]
         B.journal_append(B.INBOX_DIR / f"{B.today()}.jsonl", rec)
         if rec["kind"] == "voice":
             transcribe_voice(rec, cfg)

@@ -12,9 +12,10 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $map = [ordered]@{
     'windows'           = (Join-Path $root 'base\windows-pitfalls.md')
     'secrets'           = (Join-Path $root 'base\secrets.md')
-    'pool-coordination' = '<workspace-root>\.launcher\pool-bus\COORDINATION.md'
+    'pool-coordination' = 'C:\workspace-root\.launcher\pool-bus\COORDINATION.md'
     'pool-lifecycle'    = (Join-Path $root 'pool\lifecycle.md')
     'pool-grow-team'    = (Join-Path $root 'pool\grow-team.md')
+    'memory-migration'  = (Join-Path $root 'pool\memory-migration.md')
     'tech-lead'         = (Join-Path $root 'roles\tech-lead.md')
     'qa'                = (Join-Path $root 'roles\qa.md')
 }

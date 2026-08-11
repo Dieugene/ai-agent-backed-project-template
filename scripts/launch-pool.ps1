@@ -11,7 +11,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string[]]$Roots = @('<workspace-root>'),
+  [string[]]$Roots = @('C:\workspace-root'),
   [switch]$SelfTest,
   [switch]$NoSingleton
 )
@@ -26,6 +26,45 @@ try {
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 $Here   = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Общая библиотека манифеста (Resolve-PoolBus / Resolve-PoolCwd / аудит). Шину НЕЛЬЗЯ выводить как
+# `root\.bus`: у пулов внутри монорепо root — каталог батников, а шина в другом месте (баг 2026-07-27).
+. (Join-Path $PSScriptRoot 'pool-manifest.ps1')
+
+# Sostav pula - v samu shinu, ryadom s markerom cwd. Doska znaet tolko put k shine: manifest ey
+# ne nayti (u chasti pulov on lezhit v DOCHERNEM kataloge otnositelno roditelya shiny), a podyom
+# vverh po derevu odnazhdy podcepit CHUZHOY manifest i molcha obyavit zhivye roli gostyami. Fayl
+# vnutri toy shiny, kotoruyu opisyvaet, chuzhim byt ne mozhet po postroeniyu. Pishem pri kazhdom
+# obrashchenii k pulu, poetomu add-peer podhvatyvaetsya sam. Nikogda ne fatalno: net fayla -
+# doska schitaet kak ranshe, vseh.
+# VNIMANIE: PORYADOK strok v rospisi ne kosmetika - po pozicii roli statusnaya stroka beret
+# cvet ee plashki (sm. statusline-command.sh). Perestavish roli v manifeste - perekrasish
+# ves pul. Sortirovat rospis' po alfavitu NELZYA.
+<# A REMOTE pool is one whose role wrappers ssh into a server. Detected from the wrapper itself,
+   not from a manifest field: the field would have to be maintained by hand and would drift,
+   whereas the ssh line IS the thing that makes the pool remote. #>
+function Test-RemotePool($pool) {
+    foreach ($r in @($pool.roles)) {
+        if (-not $r.bat) { continue }
+        $bat = Join-Path $pool.root $r.bat
+        if (-not (Test-Path -LiteralPath $bat)) { continue }
+        try { $txt = Get-Content -LiteralPath $bat -Raw -ErrorAction Stop } catch { continue }
+        if ($txt -match '(?im)^[^\r\n]*\bssh\b') { return $true }
+    }
+    return $false
+}
+
+function Write-PoolRoster([object]$pool, [string]$busDir) {
+  try {
+    if (-not $pool -or -not $busDir -or -not (Test-Path -LiteralPath $busDir)) { return }
+    $owners = @($pool.roles | ForEach-Object { $_.owner } | Where-Object { $_ })
+    if ($owners.Count -eq 0) { return }
+    $ctl = Join-Path $busDir '.control'
+    if (-not (Test-Path -LiteralPath $ctl)) { $null = New-Item -ItemType Directory -Path $ctl -Force -ErrorAction Stop }
+    $body = "# Roles of this pool. Written by the picker; the board tells guests apart by it. Derived file." + [char]10 + (($owners -join [string][char]10) + [string][char]10)
+    [System.IO.File]::WriteAllText((Join-Path $ctl 'roster'), $body, (New-Object System.Text.UTF8Encoding($false)))
+  } catch { }
+}
+
 $Fzf    = Join-Path $Here 'bin\fzf.exe'
 $StateD = Join-Path $Here '.state'
 $MruPath = Join-Path $StateD 'mru.json'
@@ -78,7 +117,11 @@ function Build-AutoLayout($roles) {
       $cols += ,($leaves[$i])
     }
   }
-  if ($cols.Count -le 1) { return $leaves[0] }
+  # Вершина — ПЕРВАЯ КОЛОНКА, а не первый лист: при ровно двух ролях колонка собиралась и тут же
+  # выбрасывалась, окно открывалось с одной панелью (баг 2026-08-03: <organizer-pool>, <pool-f>,
+  # <pool-e>). Хуже того, при выборе одной НЕ-ведущей роли не стартовало вообще ничего.
+  # При одной роли $cols[0] — тот же самый лист, поведение не меняется.
+  if ($cols.Count -le 1) { return $cols[0] }
   return [pscustomobject]@{ split = 'horizontal'; children = $cols }
 }
 
@@ -102,7 +145,7 @@ function Get-ManifestsUnder($dir, $depth, $acc) {
   $mf = Join-Path $dir 'pool.manifest.json'
   if (Test-Path $mf) { [void]$acc.Add($mf) }
   if ($depth -le 0) { return }
-  Get-ChildItem -Path $dir -Directory -ErrorAction SilentlyContinue |
+  Get-ChildItem -Path $dir -Directory -Force -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notmatch '^(node_modules|\.git|\.bus|\.warp|\.state|\.inbox)$' } |
     ForEach-Object { Get-ManifestsUnder $_.FullName ($depth - 1) $acc }
 }
@@ -110,7 +153,7 @@ function Find-Manifests {
   $acc = New-Object System.Collections.ArrayList
   foreach ($root in $Roots) {
     if (-not (Test-Path $root)) { continue }
-    Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
+    Get-ChildItem -Path $root -Directory -Force -ErrorAction SilentlyContinue |
       Where-Object { $_.Name -notmatch '^(node_modules|\.git|\.bus|\.warp|\.state|\.inbox)$' } |
       ForEach-Object { Get-ManifestsUnder $_.FullName 3 $acc }
   }
@@ -124,7 +167,20 @@ function Read-Json($path) { Get-Content -Raw -Encoding UTF8 $path | ConvertFrom-
 function Get-ControlPools {
   $cf = Join-Path $Here 'control.json'
   if (-not (Test-Path $cf)) { return @() }
-  try { return @((Get-Content -Raw -Encoding UTF8 $cf | ConvertFrom-Json)) } catch { return @() }
+  try { $items = @((Get-Content -Raw -Encoding UTF8 $cf | ConvertFrom-Json)) } catch { return @() }
+  # Помечаем ЗДЕСЬ, а не флагом в control.json: признак нельзя забыть проставить в файле.
+  # Раньше control-записи отличали по пустому `root` — но root у них задан (<workspace-root>), поэтому
+  # гарды `if (-not $pool.root)` были мертвы: [Борд] Launcher открывал пустое окно на <workspace-root>\.bus,
+  # [Завершить] падало в throw «манифест пула 'launcher' не найден» (баг 2026-07-27).
+  foreach ($i in $items) { Add-Member -InputObject $i -NotePropertyName control -NotePropertyValue $true -Force }
+  return $items
+}
+
+<# Control-запись (Launcher / DevOps) — не пул: ни шины, ни контроллера гашения. #>
+function Test-IsControlPool($pool) {
+  if (-not $pool) { return $false }
+  if ($pool.PSObject.Properties.Name -contains 'control') { return [bool]$pool.control }
+  return (-not $pool.root)
 }
 
 function Load-Mru {
@@ -169,6 +225,114 @@ if ($SelfTest) {
       [pscustomobject]@{owner='r5';title='R5';bat='r5.bat'}) }
   Write-Host (New-PoolToml $demo @($demo.roles.owner))
   Write-Host ("== control.json: загружено записей = " + (@(Get-ControlPools).Count) + " ==") -ForegroundColor Cyan
+
+  # Инвариант раскладки: сколько ролей — столько терминальных панелей, сколько выбрано — столько
+  # реальных запусков (остальные панели несут строку-подсказку). Печати TOML для этого мало: она
+  # ничего не утверждает, и потерянная панель прожила незамеченной при живом самотесте.
+  Write-Host "`n== инвариант раскладки: панель на каждую роль ==" -ForegroundColor Cyan
+  $layoutBad = 0
+  $reTerm = '(?m)^type = "terminal"'
+  $reRun  = '(?m)^commands = \[''cmd /c "'      # запуск батника; подсказка пустой панели идёт через `echo`
+  foreach ($p in $paths) {
+    $m = $null
+    try { $m = Read-Json $p } catch { continue }
+    $owners = @($m.roles.owner)
+    # Число панелей от выбора не зависит — зависит только то, где команда, а где подсказка.
+    $scen = New-Object System.Collections.ArrayList
+    [void]$scen.Add($owners)                 # все роли
+    [void]$scen.Add(@($m.lead))              # только ведущий
+    [void]$scen.Add(@($owners[-1]))          # только последняя роль (у большинства пулов — не ведущий)
+    foreach ($sel in $scen) {
+      $toml = New-PoolToml $m $sel
+      $term = ([regex]::Matches($toml, $reTerm)).Count
+      $run  = ([regex]::Matches($toml, $reRun)).Count
+      if ($term -ne $owners.Count -or $run -ne @($sel).Count) {
+        $layoutBad++
+        Write-Host ("  [FAIL] {0}: ролей={1}, панелей={2}, запусков={3} (ожидалось {4})" -f $m.slug, $owners.Count, $term, $run, @($sel).Count) -ForegroundColor Red
+      }
+    }
+  }
+  # Синтетика 1..9 пиннит и само правило укладки: не больше двух панелей по вертикали, колонки вправо.
+  foreach ($k in 1..9) {
+    $roles = @(1..$k | ForEach-Object { [pscustomobject]@{ owner = "r$_"; title = "R$_"; bat = "r$_.bat" } })
+    $mk = [pscustomobject]@{ slug = "synth$k"; title = "S$k"; project = 'synthetic'; root = 'D:\x'; lead = 'r1'; roles = $roles }
+    $toml = New-PoolToml $mk @($roles.owner)
+    $term = ([regex]::Matches($toml, $reTerm)).Count
+    $cols = ([regex]::Matches($toml, '(?m)^split = "vertical"')).Count
+    if ($term -ne $k -or $cols -ne [math]::Floor($k / 2)) {
+      $layoutBad++
+      Write-Host ("  [FAIL] synth {0}: панелей={1}, колонок-по-два={2} (ожидалось {0} и {3})" -f $k, $term, $cols, [math]::Floor($k / 2)) -ForegroundColor Red
+    }
+  }
+  if ($layoutBad) { Write-Host ("== нарушений раскладки: {0} ==" -f $layoutBad) -ForegroundColor Red }
+  else { Write-Host "== раскладка: панель на каждую роль, нарушений нет ==" -ForegroundColor Green }
+
+  # Аудит по ЖИВОМУ диску: манифест обязан сходиться с wrapper'ами. Источник истины о шине и cwd —
+  # `set POOL_BUS_ROOT=` и `cd /d` в батнике (с ними реально стартует сессия), манифест лишь отражает их.
+  # Именно расхождение этих двух картин дало баг 2026-07-27 (борд смотрел в несуществующий scripts\.bus).
+  # Control-записи мимо: у них нет ни пула, ни шины.
+  Write-Host "`n== аудит манифестов против wrapper'ов ==" -ForegroundColor Cyan
+  $auditManifests = @()
+  foreach ($p in $paths) { try { $auditManifests += (Read-Json $p) } catch { Write-Host "  [FAIL] нечитаемый манифест: $p" -ForegroundColor Red } }
+  $badPools = Invoke-PoolManifestAudit $auditManifests
+  if ($badPools) { Write-Host ("== пулов с расхождениями: {0} ==" -f $badPools) -ForegroundColor Red }
+  else { Write-Host "== расхождений нет ==" -ForegroundColor Green }
+
+  # Предохранитель от повторного запуска. Гоняем ЧИСТЫЕ функции на фикстурах: живые процессы меняются
+  # посекундно, самотест на них начал бы «падать» оттого, что кто-то закрыл окно. Командные строки —
+  # дословно с живой машины (03.08.2026), включая ненормализованный путь ведущей роли <organizer-pool>.
+  Write-Host "`n== предохранитель: разбор командных строк и сопоставление ролей ==" -ForegroundColor Cyan
+  $script:guardBad = 0
+  function TGuard($name, $cond) {
+    if (-not $cond) { $script:guardBad++; Write-Host ("  [FAIL] " + $name) -ForegroundColor Red }
+  }
+  # Чистка меток гашения перед подъёмом пула. Тест структурный: сам блок сидит в теле интерактивного
+  # цикла и юнитом не вызывается, а сломать его можно двумя способами — убрать совсем либо переставить
+  # ПОСЛЕ открытия окна, и тогда роль стартует ещё в карантине и молча не услышит шину.
+  # ⚠️ Искомое СОБИРАЕТСЯ ИЗ КУСКОВ намеренно: цельный литерал тест нашёл бы сам в себе и был бы
+  # зелёным всегда — поймано мутацией, которая не покраснела (второй случай этого класса за день).
+  $lpSrc  = [System.IO.File]::ReadAllText($PSCommandPath, [System.Text.Encoding]::UTF8)
+  # Ищем ВЫЗОВ, а не упоминание: имя метки встречается и в комментариях рядом, поэтому в якорь входит
+  # сам параметр фильтра — иначе тест остаётся зелёным, когда чистка ищет уже не то (тоже поймано мутацией).
+  $needle = "-Filter 'shutdown-" + "intent-*'"
+  $iClear = $lpSrc.IndexOf($needle)
+  $iOpen  = $lpSrc.IndexOf('warp://tab_config/{0}?new_window' + '=true')
+  TGuard 'метки гашения чистятся при запуске пула' ($iClear -ge 0)
+  TGuard 'чистка стоит ДО открытия окна пула' (($iClear -ge 0) -and ($iOpen -gt $iClear))
+  TGuard 'чистятся только intent-метки, ready не трогаем' ($lpSrc.IndexOf('shutdown-' + 'ready-*') -lt 0)
+  $clSubA  = '"C:\WINDOWS\system32\cmd.exe" /c C:\workspace-root\umbrella\sub-a\claude-devops-sub-a.bat'
+  $clLead = '"C:\WINDOWS\system32\cmd.exe" /c C:\workspace-root\.launcher\scripts\..\..\launcher.bat'
+  TGuard 'путь .bat вынимается, путь самого cmd.exe — нет' (@(Get-BatPathsFromCmdLine $clSubA).Count -eq 1)
+  TGuard 'путь .bat совпадает дословно' ((Get-BatPathsFromCmdLine $clSubA)[0] -ieq 'C:\workspace-root\umbrella\sub-a\claude-devops-sub-a.bat')
+  TGuard '`..\..` схлопывается (иначе ведущая роль organizer-pool невидима)' ((Get-BatPathsFromCmdLine $clLead)[0] -ieq 'C:\workspace-root\launcher.bat')
+  TGuard 'путь в кавычках и с пробелом' ((Get-BatPathsFromCmdLine 'cmd.exe /c "D:\p q\x.bat"')[0] -ieq 'D:\p q\x.bat')
+  TGuard 'нет .bat -> пусто' (@(Get-BatPathsFromCmdLine 'powershell -File D:\x.ps1').Count -eq 0)
+  TGuard 'пустая строка -> пусто' (@(Get-BatPathsFromCmdLine '').Count -eq 0)
+
+  $mA = [pscustomobject]@{ slug='a'; root='D:\a'; bus='D:\a\.bus'; roles=@([pscustomobject]@{ owner='lead'; bat='claude-lead.bat' }) }
+  $mB = [pscustomobject]@{ slug='b'; root='D:\b'; bus='D:\b\.bus'; roles=@([pscustomobject]@{ owner='lead'; bat='claude-lead.bat' }) }
+  $paneA = [pscustomobject]@{ Owner='lead'; Bat='D:\a\claude-lead.bat'; Bus='D:\a\.bus'; ProcId=1 }
+  TGuard 'роль своего пула — жива' (Test-PoolRoleLive $mA $mA.roles[0] @($paneA))
+  TGuard 'одноимённая роль ЧУЖОГО пула — не жива (разводит шина)' (-not (Test-PoolRoleLive $mB $mB.roles[0] @($paneA)))
+  # fresh-session.ps1 поднимает ту же роль обёрткой claude-<owner>-2.bat и манифест НЕ правит:
+  # сравнение имён файлов дало бы «не жива» и разрешило дубль. Ключ — AGENT_OWNER.
+  $paneFresh = [pscustomobject]@{ Owner='lead'; Bat='D:\a\claude-lead-2.bat'; Bus='D:\a\.bus'; ProcId=2 }
+  TGuard 'клон fresh-session той же роли — жива' (Test-PoolRoleLive $mA $mA.roles[0] @($paneFresh))
+  # В одном каталоге живут claude-div-dev.bat и claude-div-dev-internal.bat (<monorepo>) —
+  # похожие имена НЕ должны склеиваться, иначе роль молча не поднимется.
+  $paneNear = [pscustomobject]@{ Owner='div-dev-internal'; Bat='D:\a\claude-div-dev-internal.bat'; Bus='D:\a\.bus'; ProcId=3 }
+  $mDev = [pscustomobject]@{ slug='d'; root='D:\a'; bus='D:\a\.bus'; roles=@([pscustomobject]@{ owner='div-dev'; bat='claude-div-dev.bat' }) }
+  TGuard 'сосед с похожим именем — не жива' (-not (Test-PoolRoleLive $mDev $mDev.roles[0] @($paneNear)))
+  # Control-запись (DevOps): шины нет ни у пула, ни у обёртки — сопоставление по нормализованному пути.
+  $mCtl  = [pscustomobject]@{ slug='c'; root='C:\workspace-root'; roles=@([pscustomobject]@{ owner='devops-orchestrator'; bat='devops-orchestrator-2.bat' }) }
+  $paneC = [pscustomobject]@{ Owner='devops-orchestrator'; Bat='C:\workspace-root\devops-orchestrator-2.bat'; Bus=$null; ProcId=4 }
+  TGuard 'control-запись без шины — жива по пути обёртки' (Test-PoolRoleLive $mCtl $mCtl.roles[0] @($paneC))
+  # Битые данные не имеют права бросать: косметика не роняет инструмент.
+  $mBad = [pscustomobject]@{ slug='x'; roles=@([pscustomobject]@{ owner='y' }) }
+  TGuard 'роль без bat/root — false, без исключения' (-not (Test-PoolRoleLive $mBad $mBad.roles[0] @($paneA)))
+  TGuard 'пустой список панелей — false' (-not (Test-PoolRoleLive $mA $mA.roles[0] @()))
+  if ($script:guardBad) { Write-Host ("== предохранитель: провалов {0} ==" -f $script:guardBad) -ForegroundColor Red }
+  else { Write-Host "== предохранитель: все проверки прошли ==" -ForegroundColor Green }
   return
 }
 
@@ -206,6 +370,11 @@ try {
     if (-not $manifests) { Write-Host "Манифесты пулов не найдены под: $($Roots -join ', ')" -ForegroundColor Red; break }
 
     $mru = Load-Mru
+    # Живость для списка — КОСМЕТИКА, один снимок на построение. В решении о запуске он не участвует:
+    # пикер живёт минутами (открыл, отвлёкся, вернулся), и за это время роль успевает умереть или
+    # подняться мимо пикера — гейт ниже берёт свой, свежий снимок.
+    $liveSnap = $null
+    try { $liveSnap = Get-LiveAgentPanes } catch { $liveSnap = $null }
     # обычные пулы — по недавности; архивные — отдельной группой внизу, с пометкой [архив]
     $normal = @($manifests | Where-Object { -not $_.archive } | Sort-Object @{ Expression = { Mru-Time $mru $_.slug }; Descending = $true }, @{ Expression = { $_.title } })
     $arch   = @($manifests | Where-Object { $_.archive } | Sort-Object @{ Expression = { $_.title } })
@@ -215,7 +384,18 @@ try {
       $when = Mru-Time $mru $pl.slug
       $pre  = if ($pl.archive) { '[архив] ' } else { '' }
       $tag  = if ($when -eq [datetime]::MinValue) { '' } else { '   (последний: ' + $when.ToString('dd.MM HH:mm') + ')' }
-      $map[($pre + ('{0}  —  {1}{2}' -f $pl.title, $pl.project, $tag))] = $pl
+      # Метка только когда есть что показать: «живо 0/7» у всех давно погашенных — шум в строке,
+      # где уже стоят [архив] и время последнего запуска. Счёт через @() — Where-Object при нуле
+      # совпадений отдаёт $null, и `.Count` молча дал бы пустое место вместо цифры.
+      $liveTag = ''
+      if ($liveSnap -and $liveSnap.Ok) {
+        try {
+          $roles = @($pl.roles)
+          $nLive = @($roles | Where-Object { Test-PoolRoleLive $pl $_ $liveSnap.Panes }).Count
+          if ($nLive -gt 0) { $liveTag = ('   [живо {0}/{1}]' -f $nLive, $roles.Count) }
+        } catch { $liveTag = '' }   # кривой манифест не имеет права ронять весь список
+      }
+      $map[($pre + ('{0}  —  {1}{2}{3}' -f $pl.title, $pl.project, $tag, $liveTag))] = $pl
     }
     $poolSel = Invoke-Fzf -Items ([string[]]$map.Keys) -Prompt 'Пул>' -Header 'Выбор пула  |  Enter — далее, Esc — выход'
     if (-not $poolSel) { break }                    # Esc на пуле -> выход из пикера
@@ -225,27 +405,51 @@ try {
       $actItems = @(
         '[Запустить] — поднять сессии пула',
         '[Завершить] — handoff -> гашение -> compact (в отдельном окне)',
-        '[Борд]      — открыть/поднять живую доску пула'
+        '[Борд]      — открыть/поднять живую доску пула',
+        '[Память]    — борд долговременной памяти ролей'
       )
       $actSel = Invoke-Fzf -Items $actItems -Prompt 'Действие>' -Header ('Пул: ' + $pool.title + '  |  Esc — назад к пулам')
       if (-not $actSel) { break }                   # Esc на действии -> назад к списку пулов
 
-      # ----- [Борд]: открыть живую доску (idempotent .bat -> board-window.ps1) -----
+      # ----- [Борд]: открыть живую доску (idempotent board-window.ps1 по ЯВНОМУ пути шины) -----
+      # Ветка «запустить board-<slug>.bat, если найдётся» СНЯТА намеренно: имена этих батников на диске
+      # со слагом не совпадают (board-audit.bat, board-daily.bat, board-economic.bat), т.е. ветка была
+      # лотереей, а её промах молча уводил на фолбэк `root\.bus` — исходный баг «борд открывается пустым».
+      # Истина о шине теперь одна — Resolve-PoolBus; батники-обёртки её лишь дублировали.
       if ($actSel.StartsWith('[Борд')) {
-        if (-not $pool.root) { Write-Host 'Это control-сессия без пула — доски нет.' -ForegroundColor Yellow; Start-Sleep -Milliseconds 900; continue }
-        $boardBat = Join-Path $pool.root ('board-' + $pool.slug + '.bat')
-        if (Test-Path $boardBat) { Start-Process -FilePath $boardBat }
-        else {
-          $bw = Join-Path (Split-Path $Here -Parent) 'pool-bus\board-window.ps1'
-          Start-Process 'powershell' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$bw,'-BusRoot',(Join-Path $pool.root '.bus'))
+        if (Test-IsControlPool $pool) { Write-Host 'Это control-сессия без пула — доски нет.' -ForegroundColor Yellow; Start-Sleep -Milliseconds 900; continue }
+        $busDir = Resolve-PoolBus $pool
+        if (-not $busDir) { Write-Host ('У пула "{0}" в манифесте нет ни bus, ни root — доску открыть не из чего.' -f $pool.title) -ForegroundColor Red; Start-Sleep -Milliseconds 1500; continue }
+        if (-not (Test-Path $busDir)) {
+          # Пустое окно вместо доски — ровно тот симптом, с которого начался баг 2026-07-27. Молчать нельзя.
+          Write-Host ('Шины нет на диске: {0}' -f $busDir) -ForegroundColor Red
+          Write-Host 'Пул ещё ни разу не переписывался, либо в манифесте кривой путь (поле bus). Окно не открываю.' -ForegroundColor Yellow
+          Start-Sleep -Milliseconds 2500
+          continue
         }
-        Write-Host ('Доска "{0}" открыта.' -f $pool.title) -ForegroundColor Green
+        Write-PoolRoster $pool $busDir
+        $bw = Join-Path (Split-Path $Here -Parent) 'pool-bus\board-window.ps1'
+        Start-Process 'powershell' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$bw,'-BusRoot',$busDir)
+        Write-Host ('Доска "{0}" открыта: {1}' -f $pool.title, $busDir) -ForegroundColor Green
         Start-Sleep -Milliseconds 700
         continue                                     # назад к выбору действия
       }
 
+      # ----- [Память]: борд долговременной памяти ролей -----
+      # Здесь это дёшево и правильно по построению: манифест уже загружен, значит cwd берётся из него
+      # (Resolve-PoolCwd), а не выводится из пути шины - вывод из шины промахнулся бы у сплит-пулов
+      # (<monorepo>, <umbrella>), где шина лежит в подпроекте, а cwd - в корне монорепо.
+      if ($actSel.StartsWith('[Память')) {
+        $mb = Join-Path (Split-Path $Here -Parent) 'pool-bus\memory-board.ps1'
+        if (-not (Test-Path $mb)) { Write-Host ('Не найден: ' + $mb) -ForegroundColor Red; Start-Sleep -Milliseconds 1500; continue }
+        Start-Process 'powershell' -ArgumentList @('-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File',$mb,'-Pool',$pool.slug)
+        Write-Host ('Борд памяти "{0}" открыт.' -f $pool.title) -ForegroundColor Green
+        Start-Sleep -Milliseconds 700
+        continue
+      }
+
       $isShutdown = $actSel.StartsWith('[Завершить')
-      if ($isShutdown -and -not $pool.root) { Write-Host 'Control-сессия: завершение через контроллер не поддерживается.' -ForegroundColor Yellow; Start-Sleep -Milliseconds 900; continue }
+      if ($isShutdown -and (Test-IsControlPool $pool)) { Write-Host 'Control-сессия: завершение через контроллер не поддерживается.' -ForegroundColor Yellow; Start-Sleep -Milliseconds 900; continue }
       $verb = if ($isShutdown) { 'Завершить' } else { 'Запустить' }
 
       while ($true) {                               # уровень РЕЖИМА (тот же пул + действие)
@@ -278,7 +482,7 @@ try {
         if ($isShutdown) {
           $allRoles = ($selected.Count -eq $pool.roles.Count)
           $scopeTxt = if ($allRoles) { 'ВЕСЬ пул' } else { ('роли: ' + ($selected -join ', ')) }
-          $confSel = Invoke-Fzf -Items @(('[Да] завершить — ' + $scopeTxt), '[Отмена]') -Prompt 'Подтверди>' -Header ('Завершить "' + $pool.title + '"? ' + $scopeTxt)
+          $confSel = Invoke-Fzf -Items @(('[Да] завершить — ' + $scopeTxt), '[Отмена]') -Prompt 'Подтверди>' -Header ('Завершить «' + $pool.title + '»? ' + $scopeTxt)   # « » вместо " — вложенные " ломают передачу --header в fzf под PS5.1 (баг «unknown option» на title с пробелом, напр. «<SUB-A> Assistant»)
           if (-not $confSel -or $confSel.StartsWith('[Отмена')) { continue }
           $shPs1  = Join-Path (Split-Path $Here -Parent) 'pool-bus\pool-shutdown.ps1'
           $psArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-File',$shPs1,'-Pool',$pool.slug,'-Full','-CloseWindow')
@@ -289,12 +493,80 @@ try {
           break                                      # назад к выбору действия
         }
 
+        # ----- Предохранитель: часть выбранных ролей уже поднята -----
+        # Повод (03.08.2026): пул <pool-a> был запущен повторно — забыли, что он уже работает.
+        # Дубль даёт две сессии на одном транскрипте (лечится только закрытием окна) и выбивает
+        # вотчера прежней роли. Снимок здесь СВОЙ и свежий, а не тот, которым помечен список.
+        $live = $null
+        try { $live = Get-LiveAgentPanes } catch { $live = $null }
+        if (-not $live -or -not $live.Ok) {
+          # Отказ проверки — это «не знаю», а не «никто не запущен». Говорим вслух и не блокируем:
+          # молчаливое «живо 0» было бы хуже прежнего поведения, потому что выглядит как гарантия.
+          Write-Host 'Проверить, что уже поднято, не удалось (WMI не ответил). Запускаю без проверки.' -ForegroundColor Yellow
+          Start-Sleep -Milliseconds 1500
+        } else {
+          $liveSel = @($selected | Where-Object {
+            $o = $_
+            $r = @($pool.roles | Where-Object { $_.owner -eq $o })
+            $r.Count -and (Test-PoolRoleLive $pool $r[0] $live.Panes)
+          })
+          # A REMOTE pool is the one case where "launch" IS "attach": enter.sh joins the existing
+          # tmux window instead of starting a second session, so the incident this guard was built
+          # for (03.08: a duplicate session on one transcript) cannot happen there. Closing the Warp
+          # window is a DISCONNECT, not a shutdown - and refusing to reopen it left the owner unable
+          # to get back to a pool that was alive the whole time (caught on <pool-a>).
+          $isRemote = $false
+          try { $isRemote = Test-RemotePool $pool } catch { $isRemote = $false }
+          if ($liveSel.Count -and $isRemote) {
+            Write-Host ('Роли уже подняты на сервере: {0}. Открываю панели — это подключение, а не второй запуск.' -f ($liveSel -join ', ')) -ForegroundColor Cyan
+            Write-Host 'Серверный пул: закрытие окна — отключение, а не гашение. Роли живут в tmux.' -ForegroundColor DarkGray
+            Start-Sleep -Milliseconds 900
+          }
+          elseif ($liveSel.Count) {
+            $free = @($selected | Where-Object { $liveSel -notcontains $_ })
+            if (-not $free.Count) {
+              Write-Host ('Все выбранные роли уже подняты: {0}' -f ($liveSel -join ', ')) -ForegroundColor Yellow
+              Write-Host 'Окно не открываю. Если панель зависла — сперва заверши пул, потом запускай.' -ForegroundColor DarkGray
+              Start-Sleep -Milliseconds 2800
+              break                                   # назад к выбору действия; MRU не трогаем — запуска не было
+            }
+            # Доднять роли в УЖЕ открытое окно нельзя (в живую панель Warp команду извне не впрыснуть),
+            # поэтому первый пункт честно говорит про второе окно, а второй — про своё последствие.
+            $gItems = @(
+              ('[Только незапущенные] — второе окно, в нём: ' + ($free -join ', ')),
+              '[Все] — поднять и живые тоже: дубль сессии на том же транскрипте, вотчер прежней будет выбит',
+              '[Отмена]'
+            )
+            $gSel = Invoke-Fzf -Items $gItems -Prompt 'Уже подняты>' -Header ('Уже работают: ' + ($liveSel -join ', ') + '  |  Esc — отмена')
+            if (-not $gSel -or $gSel.StartsWith('[Отмена')) { continue }
+            if ($gSel.StartsWith('[Только')) { $selected = $free }
+          }
+        }
+
         # ----- [Запустить]: генерация Warp tab-config -----
         $toml    = New-PoolToml $pool $selected
         $cfgName = 'poollaunch-' + $pool.slug
         if (-not (Test-Path $TabCfg)) { New-Item -ItemType Directory -Force -Path $TabCfg | Out-Null }
         [System.IO.File]::WriteAllText((Join-Path $TabCfg ($cfgName + '.toml')), $toml, (New-Object System.Text.UTF8Encoding($false)))
-        Start-Process ('warp://tab_config/{0}?new_window=true' -f $cfgName)
+        Write-PoolRoster $pool (Resolve-PoolBus $pool)
+        # 🛑 Снять метки гашения перед подъёмом пула. Под меткой роль в карантине: её сторожа молчат,
+        # баннер входящих пуст (см. Test-ShutdownQuiet в pool.ps1). Метку снимает фаза 2 контроллера,
+        # но если гашение прервали на середине — Ctrl-C, закрытое окно, таймаут — она остаётся, и
+        # поднятая заново роль оказалась бы глухой к соседям, ничем этого не показывая.
+        # Запуск пула означает, что гашение окончено, поэтому чистим здесь и без вопросов.
+        # ⚠️ Только `shutdown-intent-*`: ready-флаги не трогаем, их семантику знает контроллер.
+        $__busQ = Resolve-PoolBus $pool
+        if ($__busQ) {
+            $__ctl = Join-Path $__busQ '.control'
+            if (Test-Path $__ctl) {
+                $__stale = @(Get-ChildItem -LiteralPath $__ctl -Filter 'shutdown-intent-*' -File -Force -ErrorAction SilentlyContinue)
+                foreach ($__f in $__stale) { Remove-Item -LiteralPath $__f.FullName -Force -ErrorAction SilentlyContinue }
+                if ($__stale.Count) {
+                    Write-Host ('Снято меток гашения: {0} ({1}) — роли снова слышат шину.' -f $__stale.Count, (($__stale | ForEach-Object { $_.Name -replace '^shutdown-intent-', '' }) -join ', ')) -ForegroundColor Yellow
+                }
+            }
+        }
+  Start-Process ('warp://tab_config/{0}?new_window=true' -f $cfgName)
 
         if (-not $mru) { $mru = New-Object psobject }
         if ($mru.PSObject.Properties.Name -contains $pool.slug) { $mru.$($pool.slug) = (Get-Date).ToString('o') }

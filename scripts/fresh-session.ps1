@@ -19,7 +19,7 @@
   -Tag defaults to '2'; pass -Tag 3 (etc.) for a later re-seat of the same role.
 
   Usage:
-    fresh-session.ps1 -Manifest <pool.manifest.json> -Owner <owner> [-Tag 2] [-Force] [-DryRun]
+    fresh-session.ps1 -Manifest <pool.manifest.json> -Owner metrics-<sub-a> [-Tag 2] [-Force] [-DryRun]
 #>
 [CmdletBinding()]
 param(
@@ -42,6 +42,74 @@ $root = $m.root
 if (-not $root) { Die "manifest has no 'root'" }
 if (-not ($m.roles | Where-Object { $_.owner -eq $Owner })) {
   Die "owner '$Owner' not in manifest roles - this tool is for EXISTING owners; use add-peer.ps1 for a NEW one"
+}
+
+# ---- server pool: identity lives in scripts/roles.tsv, not in a .bat ------------------------
+# On the server a pool has NO per-role wrappers: one scripts/role.sh serves them all and the
+# session title (the resume handle) is a column in scripts/roles.tsv. A fresh session there means
+# exactly one thing: give this owner a NEW title. Mailbox, memory, ProjectKey and the tmux window
+# name are untouched - the identity invariant holds by construction, there is nothing to clone.
+$tsvPath = Join-Path $root (Join-Path 'scripts' 'roles.tsv')
+$IsServerPool = (Test-Path $tsvPath) -and -not (Test-Path (Join-Path $root ("claude-{0}.bat" -f $Owner)))
+
+if ($IsServerPool) {
+  $lines = @([System.IO.File]::ReadAllLines($tsvPath, [System.Text.Encoding]::UTF8))
+  $idx = -1
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $ln = $lines[$i]
+    if ($ln.TrimStart().StartsWith('#') -or -not $ln.Trim()) { continue }
+    if (($ln -split "`t")[0] -eq $Owner) { $idx = $i; break }
+  }
+  if ($idx -lt 0) { Die ("owner '" + $Owner + "' not in " + $tsvPath) }
+  $cols = $lines[$idx] -split "`t"
+  if ($cols.Count -lt 2 -or -not $cols[1]) { Die ("no session title for '" + $Owner + "' in " + $tsvPath) }
+  $origTitle = $cols[1]
+  $newTitle  = "{0}-{1}" -f $origTitle, $Tag
+  if ($origTitle -match ("-" + [regex]::Escape($Tag) + '$') -and -not $Force) {
+    Die ("title is already '" + $origTitle + "' - pass a higher -Tag (3, 4...) or -Force")
+  }
+  $cols[1] = $newTitle
+  # ASCII only: this file is declared pure ASCII without BOM, and PS 5.1 would read Cyrillic here
+  # as cp1251 and mangle the source itself (the damage is invisible on the machine that wrote it).
+  $note = '# fresh-session: ' + $Owner + ' - previous session title was ' + $origTitle
+  $out = @()
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($i -eq $idx) { $out += $note; $out += ($cols -join "`t") } else { $out += $lines[$i] }
+  }
+  $tsvNew = ($out -join "`n").TrimEnd("`n") + "`n"
+
+  if ($DryRun) {
+    Write-Host "[fresh-session] DRY RUN - nothing written"
+    Write-Host ("  owner (UNCHANGED): {0}   pool root: {1}" -f $Owner, $root)
+    Write-Host ("  [edit]   {0}" -f $tsvPath)
+    Write-Host ("           SessionTitle '{0}' -> '{1}'" -f $origTitle, $newTitle)
+    Write-Host  "  (server pool: no wrappers and no Warp workflow are touched - the role runs in a tmux window)"
+    exit 0
+  }
+
+  [System.IO.File]::WriteAllText($tsvPath, $tsvNew, (New-Object System.Text.UTF8Encoding($false)))
+
+  # self-verify: read the row back from disk
+  $back = [System.IO.File]::ReadAllText($tsvPath, [System.Text.Encoding]::UTF8)
+  $row  = @($back -split "`r?`n" | Where-Object { ($_ -split "`t")[0] -eq $Owner }) | Select-Object -First 1
+  $rc   = if ($row) { $row -split "`t" } else { @() }
+  $fails = 0
+  function ChkS($cond, $label) { if ($cond) { Write-Host ("  PASS  " + $label) -ForegroundColor Green } else { Write-Host ("  FAIL  " + $label) -ForegroundColor Red; $script:sfail++ } }
+  $script:sfail = 0
+  ChkS ([bool]$row)                              ("role still present: " + $Owner)
+  ChkS ($rc.Count -ge 2 -and $rc[1] -eq $newTitle) ("new session title: " + $newTitle)
+  ChkS ($rc.Count -ge 3 -and $rc[2] -eq $cols[2]) "effort unchanged"
+  ChkS ($back.Contains($origTitle))              "previous title kept in a comment"
+  Write-Host ''
+  if ($script:sfail -ne 0) { Write-Host ("[fresh-session] {0} FAILED" -f $script:sfail) -ForegroundColor Red; exit 1 }
+  Write-Host "[fresh-session] ALL PASS" -ForegroundColor Green
+  Write-Host ''
+  Write-Host 'Next steps are MANUAL - they touch a live session:'
+  Write-Host ("  1) close the role window:  tmux -L agents kill-window -t {0}:{1}" -f $m.slug, $Owner)
+  Write-Host ("  2) bring it back up:       ~/workspace/.launcher/scripts/pool-up.sh {0} {1}" -f $root, $Owner)
+  Write-Host 'Mailbox, memory and ProjectKey are the same - `pool mine` recovers the in-flight work.'
+  Write-Host 'No need to rebuild the Windows showcase: its wrapper targets the window by ROLE name, unchanged.'
+  exit 0
 }
 
 $srcBatName = if ($Bat) { $Bat } else { "claude-{0}.bat" -f $Owner }

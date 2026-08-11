@@ -12,7 +12,7 @@
 param(
     [string]$Pool,
     [switch]$All,
-    [string]$WorkspaceRoot = '<workspace-root>'
+    [string]$WorkspaceRoot = 'C:\workspace-root'
 )
 
 $ErrorActionPreference = 'Stop'

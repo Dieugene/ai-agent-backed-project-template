@@ -41,6 +41,14 @@
 | `selftest.ps1` | **Приёмочный гейт шины**: проверки ядра на обеих платформах, платформа печатается в сводке, код возврата честный. | [self-testing-and-false-greens](../docs/self-testing-and-false-greens.md), [cross-platform-port](../docs/cross-platform-port.md) |
 | `pool-manifest.ps1` | Чтение манифеста пула: пути, роли, живость; общий источник для пикера и доски. | [pool-launcher-and-warp](../docs/pool-launcher-and-warp.md) |
 | `notify-malformed.ps1` | Тост детектора искажённого вывода. ASCII-only без BOM **намеренно**. | [safety-guards](../docs/safety-guards.md) |
+| `stop-detect-malformed.ps1` | Хук `Stop`: ловит искажённый вывод сессии и поднимает сигнал. | [safety-guards](../docs/safety-guards.md) |
+| `warn-process-kill.ps1` | Предохранитель против убийства чужих процессов широкой маской. | [safety-guards](../docs/safety-guards.md) |
+| `pool-shutdown.ps1` | **Внешний контроллер завершения и перезарядки**: handoff по шине → гашение дерева → сжатие контекста; `-Recharge` дополнительно поднимает роль обратно. | [pool-shutdown-and-context-refresh](../docs/pool-shutdown-and-context-refresh.md) |
+| `fresh-session.ps1` | Свежая сессия для существующей роли (сброс залипшего транскрипта): клон обёртки под новым именем сессии, тот же ящик. | [pool-launcher-and-warp](../docs/pool-launcher-and-warp.md) |
+| `set-pool-runtime.ps1` | Задать ролям пула модель и уровень усилий флагами обёртки — вместо глобальных настроек, которые протекают во все пулы разом. | [claude-code-setup](../docs/claude-code-setup.md) |
+| `memory-sweep.ps1` | Обход памяти **всех** ролей workspace: структурная проверка плюс то, чего не видит одиночная — записи без описания и одинаковые тела у разных ролей. | [agent-long-term-memory](../docs/agent-long-term-memory.md) |
+| `memory-check.selftest.ps1` | Самотест структурной проверки памяти. Гоняется на одноразовых каталогах, живую память не читает. | [self-testing-and-false-greens](../docs/self-testing-and-false-greens.md) |
+| `new-pool.selftest.ps1` | Самотест скаффолдера: раскатка **настоящая**, на одноразовом рабочем пространстве — половина дефектов видна только на реальных файлах. | [pool-scaffolding](../docs/pool-scaffolding.md), [self-testing-and-false-greens](../docs/self-testing-and-false-greens.md) |
 
 ## Установка (минимум для одного пула)
 
@@ -55,6 +63,33 @@
    `bin\fzf.exe` (скачай с github.com/junegunn/fzf), `control.json` из примера.
 5. **Скилы (опционально).** `ref.ps1` в `<workspace-root>\.references\`, канон-доки рядом;
    тонкие стабы `SKILL.md` зовут `& ref.ps1 <topic>`.
+
+## Приёмка: что гонять и какой результат считать нормальным
+
+Скрипты несут самотесты. Прогоняй их **на этой копии**, а не на своей рабочей: зелёное на
+источнике не переносится на копию автоматически (почему — [self-testing-and-false-greens
+§2.1](../docs/self-testing-and-false-greens.md)).
+
+| Команда | Ожидаемый результат на **голой** машине |
+|---------|------------------------------------------|
+| `powershell -File selftest.ps1` | `83/83 PASS` — полностью зелёный, окружения не требует |
+| `powershell -File new-pool.selftest.ps1` | `PASS=52 FAIL=0` |
+| `powershell -File memory-check.selftest.ps1` | `PASS=12 FAIL=0` |
+| `powershell -File agent-memory.selftest.ps1` | `PASS=52 FAIL=1` — одна проверка требует раскатанного рабочего пространства |
+| `powershell -File launch-pool.ps1 -SelfTest` | зелёный; при отсутствии манифестов список пулов пуст, это норма |
+| `powershell -File pool-shutdown.ps1 -SelfTest` | `92 ok / 10 fail` |
+| `python -m pytest -q` в `../remote-bridge/` | `54 passed` |
+
+⚠️ **Десять красных у контроллера завершения — ожидаемы и не означают поломки.** Эти проверки
+обращаются к **живым** манифестам пулов и обёрткам ролей на диске: в рабочем пространстве они дают
+`102 ok / 0 fail`, а на голой машине им просто нечего читать. Все прочие проверки контроллера —
+чистые и зелёные. Если хочешь отличать одно от другого: у «средовых» в тексте ошибки фигурирует
+отсутствующий манифест или `.bat` роли.
+
+**Одна структурная разница с источником.** В рабочем пространстве пикер лежит отдельно от общей
+библиотеки манифеста и подключает её через родительский каталог; здесь всё сложено плоско в
+`scripts/`, поэтому в опубликованной копии путь подключения — «рядом с собой». Это единственная
+правка кода при публикации, всё остальное — замена реальных имён на обезличенные.
 
 ## Кодировки (Windows / PowerShell 5.1)
 

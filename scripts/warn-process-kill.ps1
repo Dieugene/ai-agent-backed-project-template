@@ -26,7 +26,14 @@ function Test-BroadKill {
         '(?i)stop-process\b[^\r\n;|]*-name\b',
         '(?i)\btaskkill\b[^\r\n]*/(im|fi|t)\b',
         '(?i)\.terminate\s*\(',
-        '(?i)invoke-cimmethod\b[^\r\n]*terminate'
+        '(?i)invoke-cimmethod\b[^\r\n]*terminate',
+        # Unix-shaped sweep - the form that actually works here: Git Bash ships ps/xargs/kill but
+        # NOT pkill/pgrep/killall/pidof (checked 2026-08-05), so a sweep has to be spelled as a
+        # pipeline. NO filter stage is required: "ps -eo pid= | xargs kill -9" carries no grep/awk
+        # and still takes out every process of the user - demanding grep/awk let that one through.
+        # "kill -0" is a liveness probe, not a kill, and docker/podman kill target containers:
+        # both are excluded below.
+        '(?i)\bps\b[^\r\n]*\|[^\r\n]*\bxargs\b[^\r\n]*(?<!docker )(?<!podman )\bkill\b(?!\s+-0\b)'
     )
     foreach ($p in $patterns) { if ($cmd -match $p) { return $p } }
     return $null
@@ -41,6 +48,20 @@ if ($SelfTest) {
         @{ expect = 'WARN'; c = 'Stop-Process -Name node' }
         @{ expect = 'WARN'; c = 'taskkill /F /IM powershell.exe' }
         @{ expect = 'WARN'; c = '$w | Stop-Process' }
+        @{ expect = 'WARN'; c = 'ps aux | grep claude | awk ''{print $2}'' | xargs kill -9' }
+        @{ expect = 'WARN'; c = 'ps -ef | grep -v grep | grep node | xargs kill' }
+        # One case per pattern that no other pattern claims - verified by removing each
+        # pattern in turn and checking that exactly this case goes red.
+        @{ expect = 'WARN'; c = 'gwmi win32_process | kill' }
+        @{ expect = 'WARN'; c = '$proc.Terminate()' }
+        @{ expect = 'WARN'; c = 'Invoke-CimMethod -InputObject $p -MethodName Terminate' }
+        @{ expect = 'WARN'; c = 'ps -eo pid= | xargs kill -9' }
+        @{ expect = 'WARN'; c = 'ps -e -o pid | xargs kill' }
+        @{ expect = 'PASS'; c = 'ps -ef | awk ''{print $2}'' | xargs -r kill -0' }
+        @{ expect = 'PASS'; c = 'docker ps -q | grep -v x | xargs -r docker kill' }
+        @{ expect = 'PASS'; c = 'ps aux | grep claude | wc -l' }
+        @{ expect = 'PASS'; c = 'kill 12345' }
+        @{ expect = 'PASS'; c = 'grep -rn pkill ~/.claude/hooks' }
         @{ expect = 'PASS'; c = 'Stop-Process -Id 12345' }
         @{ expect = 'PASS'; c = 'taskkill /PID 12345 /F' }
         @{ expect = 'PASS'; c = 'Get-Process -Name node' }
@@ -77,7 +98,7 @@ $hit = Test-BroadKill $cmd
 if (-not $hit) { exit 0 }
 
 $advice = @'
-POOL SAFETY (advisory): killing by name/query hits EVERY matching process on the machine -- you can kill OTHER pool agents' watchers or whole Claude sessions, not just yours. For one clean watcher, don't kill anything -- just re-arm "pool.ps1 watch" (supersedes only your own by PID). If you must kill, target a specific PID (Stop-Process -Id), not -Name/CommandLine. (Vanished processes are usually a sibling's kill, not the antivirus.)
+POOL SAFETY (advisory): killing by name/query hits EVERY matching process on the machine -- you can kill OTHER pool agents' watchers or whole Claude sessions, not just yours. For one clean watcher, don't kill anything -- just re-arm "pool.ps1 watch" (supersedes only your own by PID). If you must kill, target a specific PID (Stop-Process -Id, or kill <pid>), not -Name/CommandLine and not a "ps | grep | xargs kill" sweep. (Vanished processes are usually a sibling's kill, not the antivirus.)
 '@
 $out = [ordered]@{
     hookSpecificOutput = [ordered]@{

@@ -10,7 +10,7 @@
         (4) корень поиска документов     — Find-HandoffFile (ИСТОРИЯ: строка врала — функция всегда
             получала РОДИТЕЛЯ ШИНЫ, а не `root`; с 2026-08-02 её вытеснила память роли, которая
             берётся от `cwd`, смысл (3), потому что у 5 пулов родитель шины и cwd — разные каталоги)
-    У пулов, выросших внутри монорепо (<monorepo>, <pool-c>, <sub-a>), это ТРИ РАЗНЫХ каталога,
+    У пулов, выросших внутри монорепо (monorepo, pool-e, sub-a), это ТРИ РАЗНЫХ каталога,
     и один `root` их не описывает. Отсюда молчаливые промахи: борд смотрел в `<root>\.bus`, которого нет.
 
     РЕШЕНИЕ: смыслы (2) и (3) выносятся в отдельные НЕОБЯЗАТЕЛЬНЫЕ поля `bus` и `cwd`, с фолбэком на `root`.
@@ -27,12 +27,24 @@
 #>
 
 <# Каталог шины пула: явное поле `bus`, иначе legacy-фолбэк `<root>\.bus`. Существование НЕ проверяется. #>
+# PowerShell 5.1 has no $IsWindows at all, so the platform is derived once, the same way pool.ps1 does it.
+$script:OnWindowsPM = ($null -eq (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) -or $IsWindows
+
 function Resolve-PoolBus {
     param($Manifest)
     if (-not $Manifest) { return $null }
     $props = $Manifest.PSObject.Properties.Name
     if (($props -contains 'bus') -and $Manifest.bus) { return [string]$Manifest.bus }
-    if (($props -contains 'root') -and $Manifest.root) { return (Join-Path ([string]$Manifest.root) '.bus') }
+    # Join-Path resolves the PSDrive, so on Linux a windows root (D:\...) throws "drive D does not
+    # exist" - and manifests of pools moved to the server deliberately keep their windows root.
+    # Joining with the path's OWN separator is platform-blind; a silent try/catch would also hide
+    # real failures. Found on a live Linux run: the scan kept going but every bus came back null,
+    # which would push bus-based target resolution back onto the cwd heuristic without a word.
+    if (($props -contains 'root') -and $Manifest.root) {
+        $r = ([string]$Manifest.root).TrimEnd([char]92, [char]47)
+        $sep = if ($r -match '/' -and $r -notmatch '\\') { [char]47 } else { [char]92 }
+        return ($r + $sep + '.bus')
+    }
     return $null
 }
 
@@ -88,8 +100,9 @@ function Get-BatOwner {
 }
 
 <# Схлопнуть `..` в пути. Чистая строковая операция: диска не касается, существования не требует.
-   Нужна потому, что манифест пула supervisors несёт `..\..\launcher.bat`, а Warp-workflow той же роли
-   зовёт `<workspace-root>\launcher.bat` — без нормализации это два разных «файла». #>
+   Манифест <organizer-pool>, ради которого это писалось, теперь несёт прямой `claude-launcher.bat` —
+   но функция остаётся несущей: её используют Test-PathOverlap и Get-BatPathsFromCmdLine, а живые
+   процессы ещё какое-то время будут показывать старую командную строку с `..\..`. #>
 function Get-NormalPath {
     param([string]$Path)
     if (-not $Path) { return '' }
@@ -145,7 +158,7 @@ function Get-LiveAgentPanes {
 
 <#
     Поднята ли роль пула. Ключ — владелец; пулы с одноимёнными ролями (`lead` есть и у <pool-a>,
-    и у networking-assistant) разводятся по шине из обёртки, а где шины нет — по пути обёртки.
+    и у <pool-name>) разводятся по шине из обёртки, а где шины нет — по пути обёртки.
     Чистая функция: $Panes приходит снаружи, чтобы её можно было гонять в -SelfTest на фикстурах.
 #>
 function Test-PoolRoleLive {
@@ -237,3 +250,129 @@ function Invoke-PoolManifestAudit {
     }
     return $bad
 }
+
+<#
+    SHARED WORKSPACE SCAN + NAME-COLLISION GUARDS.
+
+    Why here: the scan used to exist TWICE - Get-AllManifests in pool-shutdown.ps1 (-Depth 3 from the
+    workspace root) and Get-ManifestsUnder in the picker (depth 3 under EACH top-level dir, i.e. one
+    level deeper). A pool visible to one and invisible to the other makes any guard blind exactly where
+    it is needed. One scan, one depth, both callers.
+
+    Collision scope is deliberately NOT "unique in the workspace": identical role names in
+    non-overlapping pools are legitimate and in use today (qa lives in three pools, tech-lead in three).
+    What must never collide is (a) roles sharing a BUS - they would share a mailbox, and (b) roles
+    sharing a working directory - they would share the memory store and the session-history namespace.
+#>
+function Get-WorkspaceManifests {
+    param([string]$WorkspaceRoot, [int]$Depth = 4)
+    # The default is resolved HERE, not in the signature, so we can tell "caller passed a path that
+    # does not exist yet" (legitimate - a pool is being created in a new place) from "we fell back to
+    # a default that does not exist here" (a blind guard). The second must never read as "clean":
+    # combined with the missing-root rule below it would silently approve every name on a server.
+    $explicit = $PSBoundParameters.ContainsKey('WorkspaceRoot') -and $WorkspaceRoot
+    if (-not $explicit) {
+        if ($script:OnWindowsPM) { $WorkspaceRoot = 'C:\workspace-root' }
+        else { return [pscustomobject]@{ Ok = $false; Error = 'workspace root must be passed explicitly on this platform'; Manifests = @(); Broken = @() } }
+        if (-not (Test-Path -LiteralPath $WorkspaceRoot -PathType Container)) {
+            return [pscustomobject]@{ Ok = $false; Error = ('default workspace root not found: ' + $WorkspaceRoot); Manifests = @(); Broken = @() }
+        }
+    }
+    # A MISSING root is a definite answer ("no manifests here"), not an unknown one: creating a pool in
+    # a brand-new location is legitimate, and treating it as a scan failure refused that outright
+    # (caught by the companion on a run into a fresh temp dir). Only a FAILED traversal is unknown.
+    if (-not (Test-Path -LiteralPath $WorkspaceRoot -PathType Container)) {
+        return [pscustomobject]@{ Ok = $true; Error = $null; Manifests = @(); Broken = @() }
+    }
+    $res = @(); $broken = @(); $ok = $true
+    try {
+        # ⚠️ -Force обязателен: на Unix PowerShell считает СКРЫТЫМ всё, что начинается с точки, и без
+        # него молча пропускает такие каталоги. Пул в ~/workspace/.foo оказывался невидим и для этого
+        # гарда (второй пул с тем же именем прошёл бы молча), и для гашения. На Windows точка атрибута
+        # Hidden не даёт, поэтому на рабочей машине дефект не проявляется вовсе — нашёл компаньон
+        # боевым прогоном на сервере. Отсюда же конвенция «служебный каталог пула на сервере — _foo».
+        $files = @(Get-ChildItem -LiteralPath $WorkspaceRoot -Recurse -Depth $Depth -File -Force -Filter 'pool.manifest.json' -ErrorAction Stop |
+                   Where-Object { $_.FullName -notmatch '[\\/](notes[\\/]backup|node_modules|\.git|_windows)[\\/]' })   # разделитель ОБА: на Linux обратного слэша в путях нет, и запись через '\\' не исключала ничего. _windows = витрина СЕРВЕРНОГО пула: она законно несёт ВТОРОЙ манифест с тем же слагом, и учёт её дал бы имя, конфликтующее само с собой
+    } catch { return [pscustomobject]@{ Ok = $false; Error = $_.Exception.Message; Manifests = @(); Broken = @() } }
+    foreach ($fi in $files) {
+        try { $j = Get-Content -LiteralPath $fi.FullName -Raw -Encoding UTF8 | ConvertFrom-Json }
+        catch { $broken += $fi.FullName; $ok = $false; continue }
+        $cwd = if ($j.PSObject.Properties.Name -contains 'cwd' -and $j.cwd) { [string]$j.cwd } else { [string]$j.root }
+        $res += [pscustomobject]@{
+            Slug   = [string]$j.slug
+            Path   = $fi.FullName
+            Cwd    = $cwd
+            Bus    = (Resolve-PoolBus $j)
+            Owners = @(@($j.roles) | ForEach-Object { [string]$_.owner })
+        }
+    }
+    return [pscustomobject]@{ Ok = $ok; Error = $null; Manifests = $res; Broken = $broken }
+}
+
+<# Two paths overlap when they are equal or one contains the other. #>
+function Test-PathOverlap {
+    param([string]$A, [string]$B)
+    if (-not $A -or -not $B) { return $false }
+    $na = (Get-NormalPath $A); $nb = (Get-NormalPath $B)
+    if (-not $na -or -not $nb) { return $false }
+    if ([string]::Equals($na, $nb, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    if ($na.StartsWith($nb + [char]92, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    if ($nb.StartsWith($na + [char]92, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    return $false
+}
+
+<# Message templates live next to the guards so every caller phrases the refusal identically. #>
+function Get-GuardMessage {
+    param([ValidateSet('owner','slug','ambiguous','scanfail','broken')][string]$Kind)
+    switch ($Kind) {
+        'owner' { return 'owner ''{0}'' уже занят в пуле ''{1}'' (общий скоуп: {2}). Одноимённые роли там делят почтовый ящик и каталог памяти. Возьми имя с признаком пула, например ''{3}''.' }
+        'slug' { return 'слаг ''{0}'' уже занят пулом в {1}. Слаг обязан быть уникален на весь воркспейс: по нему пикер запускает и ГАСИТ пул. Возьми другой, например с префиксом проекта.' }
+        'ambiguous' { return 'owner ''{0}'' есть в нескольких пулах: {1}. Имя неоднозначно, гасить по нему нельзя - можно убить чужую сессию. Повтори с явным пулом: -Pool <слаг> -Only {0}' }
+        'scanfail' { return 'обход манифестов дал сбой ({0}). Проверку на конфликт имён СЧИТАЮ НЕПРОЙДЕННОЙ - молчаливое ''чисто'' здесь опаснее отказа.' }
+        'broken' { return 'манифест не разобран, пропущен из проверки: {0}' }
+    }
+}
+
+<# Conflicts for a role name about to be created. Returns objects {Slug; Scope}; empty array = free.
+   A scan failure THROWS rather than returning "clean": a silent pass is the dangerous answer here. #>
+function Get-OwnerConflicts {
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [string]$Cwd,
+        [string]$Bus,
+        [string]$ExcludeSlug,
+        [string]$WorkspaceRoot
+    )
+    # Forward the root ONLY if the caller gave one - otherwise let the scanner apply (and validate)
+    # its own default, instead of passing an empty string that would look explicit.
+    $scan = if ($WorkspaceRoot) { Get-WorkspaceManifests -WorkspaceRoot $WorkspaceRoot } else { Get-WorkspaceManifests }
+    if (-not $scan.Ok -and @($scan.Manifests).Count -eq 0) { throw ((Get-GuardMessage 'scanfail') -f $scan.Error) }
+    $hits = @()
+    foreach ($m in $scan.Manifests) {
+        if ($ExcludeSlug -and $m.Slug -eq $ExcludeSlug) { continue }
+        if ($m.Owners -notcontains $Owner) { continue }
+        if ($Bus -and $m.Bus -and (Test-SamePath $Bus $m.Bus)) { $hits += [pscustomobject]@{ Slug = $m.Slug; Scope = $m.Bus }; continue }
+        if ($Cwd -and $m.Cwd -and (Test-PathOverlap $Cwd $m.Cwd)) { $hits += [pscustomobject]@{ Slug = $m.Slug; Scope = $m.Cwd } }
+    }
+    # No leading comma: @() around a comma-wrapped return counts the WRAPPER (measured - every
+    # probe came back as 1). Plain return + @() at the call site gives 0/1/N correctly.
+    return $hits
+}
+
+<# A slug must be unique workspace-wide: the picker both LAUNCHES and SHUTS a pool by it. #>
+function Get-SlugConflicts {
+    param([Parameter(Mandatory)][string]$Slug, [string]$ExcludePath, [string]$WorkspaceRoot)
+    # Forward the root ONLY if the caller gave one - otherwise let the scanner apply (and validate)
+    # its own default, instead of passing an empty string that would look explicit.
+    $scan = if ($WorkspaceRoot) { Get-WorkspaceManifests -WorkspaceRoot $WorkspaceRoot } else { Get-WorkspaceManifests }
+    if (-not $scan.Ok -and @($scan.Manifests).Count -eq 0) { throw ((Get-GuardMessage 'scanfail') -f $scan.Error) }
+    $hits = @()
+    foreach ($m in $scan.Manifests) {
+        if ($ExcludePath -and (Test-SamePath $ExcludePath $m.Path)) { continue }
+        if ([string]::Equals($m.Slug, $Slug, [StringComparison]::OrdinalIgnoreCase)) { $hits += $m.Path }
+    }
+    # No leading comma: @() around a comma-wrapped return counts the WRAPPER (measured - every
+    # probe came back as 1). Plain return + @() at the call site gives 0/1/N correctly.
+    return $hits
+}
+

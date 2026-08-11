@@ -2,8 +2,8 @@
   new-pool.ps1 — scaffolder for a new bus-native standalone agent pool.
 
   Generates the full skeleton of a standalone monorepo + agent pool wired to the
-  shared maildir pool bus (<workspace-root>\.launcher\pool-bus\pool.ps1). Output shape
-  mirrors the validated reference pool `<pool-b>`:
+  shared maildir pool bus (__BUSTOOL__). Output shape
+  mirrors the validated reference pool `pool-b`:
 
     <root>/
       .bus/                              (lazy maildir; created empty)
@@ -32,17 +32,28 @@
   USAGE
     # Rich (recommended): a UTF-8 JSON spec carries Cyrillic role labels cleanly.
     powershell -File new-pool.ps1 -Spec my-pool.json
+    # Каталог назван иначе, чем сам пул (служебный префикс каталога — конвенция workspace):
+    powershell -File new-pool.ps1 -Name _shop-crew -Slug shop-crew -Roles supervisor,devops
     # Quick inline (ASCII owners; labels become TODO placeholders):
-    powershell -File new-pool.ps1 -Name <pool-b> -Roles methodist,author,critic -Lead methodist
+    powershell -File new-pool.ps1 -Name pool-b -Roles methodist,author,critic -Lead methodist
     # Dry run:
     powershell -File new-pool.ps1 -Spec my-pool.json -WhatIf
 
   SPEC JSON
     {
-      "name": "<pool-b>",                 (required; kebab-case; = workspace folder)
-      "pool": "<pool-b>-pool",            (optional; default "<name>-pool")
+      "name": "pool-b",                 (required; kebab-case; = ИМЯ КАТАЛОГА пула)
+      "slug": "pool-b",                 (optional; default = name; ТЕХНИЧЕСКОЕ имя пула:
+                                                 сессия tmux, ключ пикера, tab-конфиг Warp.
+                                                 Строчная латиница/цифры/дефис/подчёркивание;
+                                                 точка и двоеточие ЗАПРЕЩЕНЫ — ломают адресацию tmux)
+      "pool": "pool-b-pool",            (optional; default "<slug>-pool")
+      "poolTitle": "Уроки на каждый день",     (optional; default = slug; ЧЕЛОВЕЧЕСКОЕ имя пула —
+                                                 именно его печатает строкой пикер)
       "title": "учебные задания на каждый день",(optional; one-liner for CLAUDE.md/README)
       "displaySuffix": "Daily",                (optional; default PascalCase of name's 1st segment)
+      "leadEffort": "xhigh",                   (optional; default "xhigh"; усилие ВЕДУЩЕГО)
+      "effort": "medium",                      (optional; default "medium"; усилие рядовых ролей.
+                                                 Допустимые: low, medium, high, xhigh, max)
       "lead": "methodist",                     (optional; default first role)
       "roles": [
         { "owner": "methodist", "label": "Ведущий Методист — рамка и план" },
@@ -53,12 +64,36 @@
 param(
     [string]   $Spec,
     [string]   $Name,
+    # Слаг — ТЕХНИЧЕСКОЕ имя пула: сессия tmux, ключ пикера и его MRU, tab-конфиг Warp.
+    # По умолчанию равен имени каталога; задаётся отдельно, когда каталог назван иначе. Служебный
+    # префикс каталога («_foo», «.foo») в САМ слаг переносить нельзя — точка ломает адресацию tmux.
+    [string]   $Slug,
     [string[]] $Roles,
     [string]   $Lead,
     [string]   $Title,
+    # Человеческое имя пула — то, что видит владелец строкой в пикере («Супервайзоры: Launcher +
+    # сервер»). По умолчанию равно слагу, и до этого параметра пикер печатал именно слаг: живые пулы
+    # имя имеют, а сгенерированные — нет.
+    [string]   $PoolTitle,
     [string]   $DisplaySuffix,
     [string]   $Pool,
-    [string]   $WorkspaceRoot = '<workspace-root>',
+    [string]   $WorkspaceRoot = '',
+    # Корень ПРОСТРАНСТВА — не путать с предыдущим: в -WorkspaceRoot пул создаётся, а от -SpaceRoot
+    # проверяется уникальность слага. Задавать руками нужно редко (нестандартная раскладка, прогон
+    # набора проверок над песочницей); по умолчанию берётся конвенционный корень.
+    [string]   $SpaceRoot     = '',
+    # Усилия ролей. Раньше были зашиты константами, и владелец правил их в roles.tsv после создания
+    # пула — то есть каждый следующий пул рождался снова со старым значением (просьба компаньона
+    # 06.08). Значения по умолчанию прежние: ведущему выше, рядовым medium.
+    [string]   $LeadEffort    = '',
+    [string]   $Effort        = '',
+    # --- витрина серверного пула (используется только при запуске на сервере) -
+    # Пул живёт на сервере, но открывает его человек со своей машины: пикеру там нужны манифест и
+    # обёртки со ssh. Скаффолдер кладёт их в <пул>/_windows/ как в выходной лоток, забирает оттуда
+    # pull-server-pool.ps1. Второго генератора на той стороне НЕТ намеренно: две копии разъезжаются.
+    [string]   $SshTarget    = 'agents@77.239.103.213',
+    [string]   $SshKey       = 'C:\workspace-root\.launcher\secrets\owner_server',
+    [string]   $WindowsRoot  = '',      # где витрина ляжет на рабочей машине; пусто = вывести из пути пула
     [switch]   $Force,
     [switch]   $WhatIf
 )
@@ -66,13 +101,43 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:U8NoBom = New-Object System.Text.UTF8Encoding($false)
 
+# ---- платформа -----------------------------------------------------------
+# Та же идиома, что в pool.ps1: PowerShell 5.1 переменной $IsWindows не имеет ВООБЩЕ.
+$script:OnWindows = $true
+try { $__isWin = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue; if ($__isWin) { $script:OnWindows = [bool]$__isWin.Value } } catch { }
+
+# ⚠️ Два РАЗНЫХ корня, и путать их нельзя:
+#   $SpaceRoot     — корень пространства: где лежат общие инструменты (шина, память, канон).
+#   $WorkspaceRoot — где создаётся сам пул. По умолчанию совпадает, но задаётся отдельно.
+# Раньше инструменты были зашиты абсолютом, поэтому -WorkspaceRoot на них не влиял; сохраняем это.
+# На сервере корень выводится от $HOME, а не зашивается: у коллеги другой домашний каталог, и
+# зашитый /home/agents увёл бы его роли в чужое пространство.
+if (-not $SpaceRoot) { $SpaceRoot = if ($script:OnWindows) { 'C:\workspace-root' } else { Join-Path $HOME 'workspace' } }
+if (-not $WorkspaceRoot) { $WorkspaceRoot = $SpaceRoot }
+
+# Общие инструменты пространства — одна копия на пространство, путь от корня ПРОСТРАНСТВА.
+$WsBusTool    = Join-Path $SpaceRoot (Join-Path '.launcher' (Join-Path 'pool-bus' 'pool.ps1'))
+$WsRefTool    = Join-Path $SpaceRoot (Join-Path '.references' 'ref.ps1')
+$WsPrinciples = Join-Path $SpaceRoot (Join-Path '.launcher' (Join-Path 'standards' 'working-principles.md'))
+$WsBoardTool  = Join-Path $SpaceRoot (Join-Path '.launcher' (Join-Path 'pool-bus' 'board-window.ps1'))
+
+# Чем движок зовёт хуки. На сервере это pwsh по абсолютному пути: хук исполняется в неинтерактивной
+# оболочке, где ~/.local/pwsh в PATH может не попасть.
+$PwshExe = if ($script:OnWindows) { 'powershell' } else {
+    $c = Join-Path $HOME '.local/pwsh/pwsh'
+    if (Test-Path $c) { $c } else { 'pwsh' }
+}
+$HookPrefix  = if ($script:OnWindows) { 'powershell -NoProfile -ExecutionPolicy Bypass -File' } else { "$PwshExe -NoProfile -File" }
+# Значение уезжает В JSON, поэтому экранируется здесь, а не в шаблоне.
+$HookCmdJson = (('{0} "{1}"' -f $HookPrefix, $WsBusTool) -replace '\\', '\\') -replace '"', '\"'
+
 # ---- канон параметров запуска для новых пулов -----------------------------
 # Модель пиним ВСЕМ ролям: без явного --model сессия при `--resume` восстанавливается на своей
 # старой модели, а глобальный /model владельца протекает во все пулы разом.
 # Менять постфактум — .launcher\pool-bus\set-pool-runtime.ps1 (там те же значения).
 $PoolModel      = 'claude-opus-5[1m]'
-$PoolLeadEffort = 'high'
-$PoolEffort     = 'medium'
+# Усилия задаются параметрами -LeadEffort / -Effort (или ключами спеки) и разбираются НИЖЕ, после
+# чтения спеки: здесь их значения ещё не известны.
 
 # ---- resolve spec --------------------------------------------------------
 $roleList = @()   # array of [pscustomobject]@{ owner=..; label=..; lead=$bool }
@@ -83,7 +148,11 @@ if ($Spec) {
     if (-not $j.name)  { throw "spec.name is required" }
     $Name          = $j.name
     if ($j.pool)          { $Pool = $j.pool }
+    if ($j.slug)          { $Slug = $j.slug }
     if ($j.title)         { $Title = $j.title }
+    if ($j.poolTitle)     { $PoolTitle = $j.poolTitle }
+    if ($j.leadEffort)    { $LeadEffort = $j.leadEffort }
+    if ($j.effort)        { $Effort = $j.effort }
     if ($j.displaySuffix) { $DisplaySuffix = $j.displaySuffix }
     if ($j.lead)          { $Lead = $j.lead }
     if (-not $j.roles -or @($j.roles).Count -eq 0) { throw "spec.roles must be a non-empty array" }
@@ -93,6 +162,12 @@ if ($Spec) {
 } else {
     if (-not $Name)  { throw "either -Spec <file> or -Name <name> -Roles <ids> is required" }
     if (-not $Roles -or $Roles.Count -eq 0) { throw "-Roles is required when not using -Spec" }
+    # ⚠️ Через `powershell -File` массив НЕ разбирается: -Roles a,b,c приезжает ОДНОЙ строкой «a,b,c»
+    # (замер: count=1). Ровно так вызов записан в шапке этого файла ⇒ пул молча создавался с одной
+    # ролью по имени «a,b,c»: ящик шины, окно и обёртка — с запятой внутри. Дефект был невидим, пока
+    # его не вскрыл гард на имена ролей. Из сессии PowerShell (& new-pool.ps1 -Roles a,b) массив
+    # приходит нормальным, поэтому режем сами: настоящему массиву split безвреден, одну строку чинит.
+    $Roles = @($Roles | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     foreach ($o in $Roles) {
         $roleList += [pscustomobject]@{ owner = [string]$o; label = "TODO: роль <$o> — заполнить" }
     }
@@ -105,15 +180,82 @@ function To-Pascal([string]$s) {
     }) -join ''
 }
 
-if (-not $Pool)          { $Pool = "$Name-pool" }
-if (-not $DisplaySuffix) { $DisplaySuffix = To-Pascal (($Name -split '-')[0]) }
+if (-not $Slug)          { $Slug = $Name }
+
+# ⚠️ Слаг становится ИМЕНЕМ СЕССИИ tmux, а там точка и двоеточие — служебные разделители адреса
+# «сессия:окно.панель». Пул со слагом «.<organizer-pool>» создаётся молча, а первое же окно роли падает
+# с «can't specify pane here» (боевой прогон; экранирование '=' не спасает, проверено).
+# Каталог при этом может называться как угодно — он к tmux отношения не имеет.
+# Регистр: сравнение слага разъезжается между сторонами — гарды сравнивают без учёта регистра,
+# а tmux и поиск пула на сервере ([ "$s" = "$Pool" ]) — с учётом. Дешевле запретить заглавные.
+# ⚠️ Поэтому сравнение здесь РЕГИСТРОЗАВИСИМОЕ: `-notmatch` регистр игнорирует, и класс [a-z0-9]
+# пропускал бы '<Organizer-Pool>' — ровно тот случай, ради которого писан абзац выше (замер: -notmatch
+# даёт False, -cnotmatch True). Обратно на -notmatch не менять, гард станет декорацией.
+# Только цифры: в адресе tmux число в позиции окна читается как ИНДЕКС окна, а не имя.
+if ($Slug -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or $Slug -match '^[0-9]+$') {
+    throw ("имя пула '$Slug' не годится: строчная латиница, цифры, дефис и подчёркивание; первый знак — не разделитель; одни цифры нельзя. " +
+           "Каталог называй как хочешь (-Name), а имя пула задай отдельно: -Slug <имя> либо slug в спеке. " +
+           "Причина запрета: точка и двоеточие — служебные разделители адреса сессии tmux, пул с ними создаётся, но не поднимается.")
+}
+# Имя роли — ВТОРАЯ половина адреса tmux (сессия:окно): окно называется по owner, и точка в нём
+# даёт тот же класс отказа, что и в слаге. Гард, написанный из-за служебных символов, обязан
+# накрывать обе половины адреса, иначе роль не поднимется, а причина будет неочевидна.
+foreach ($__r in $roleList) {
+    if (-not $__r.owner) {
+        throw "у роли в спеке пустой owner: это имя роли, по нему заводятся ящик шины, обёртка и окно. Заполни roles[].owner либо -Roles."
+    }
+    if ($__r.owner -cnotmatch '^[a-z0-9][a-z0-9_-]*$') {
+        throw ("имя роли '$($__r.owner)' не годится: строчная латиница, цифры, дефис и подчёркивание. " +
+               "Переименуй роль в -Roles либо в roles[].owner спеки. " +
+               "Причина запрета: имя роли становится именем окна tmux, а точка и двоеточие в нём ломают адресацию.")
+    }
+}
+# Производные считаются ПОСЛЕ проверки: иначе негодное значение сначала разъезжается по имени
+# списка задач и заголовку сессии, и только потом выясняется, что оно негодное.
+# Усилия: значения по умолчанию прежние (ведущему выше рядовых). Проверяем допустимость — опечатка
+# иначе молча уезжает в roles.tsv и в обёртку роли, а движок споткнётся о неё только при старте,
+# далеко от причины. Раньше обе величины были константами, и владелец правил их руками после
+# создания пула ⇒ каждый следующий пул рождался снова со старым значением.
+$__efforts = @('low','medium','high','xhigh','max')
+foreach ($__pair in @(,@('-LeadEffort', $LeadEffort)) + @(,@('-Effort', $Effort))) {
+    if ($__pair[1] -and ($__efforts -notcontains $__pair[1])) {
+        throw ("значение " + $__pair[0] + " '" + $__pair[1] + "' не годится: " + ($__efforts -join ', ') + ".")
+    }
+}
+$PoolLeadEffort = if ($LeadEffort) { $LeadEffort } else { 'xhigh' }
+$PoolEffort     = if ($Effort)     { $Effort }     else { 'medium' }
+
+if (-not $Pool)          { $Pool = "$Slug-pool" }
+if (-not $PoolTitle)     { $PoolTitle = $Slug }
+if (-not $DisplaySuffix) { $DisplaySuffix = To-Pascal (($Slug -split '-')[0]) }
 if (-not $Lead)          { $Lead = $roleList[0].owner }
 if (-not $Title)         { $Title = "TODO: одна строка — что делает пул" }
 if (-not ($roleList.owner -contains $Lead)) { throw "lead '$Lead' is not among roles: $($roleList.owner -join ', ')" }
 
+. (Join-Path $PSScriptRoot 'pool-manifest.ps1')
 $Root       = Join-Path $WorkspaceRoot $Name
 $Bus        = Join-Path $Root '.bus'
 $ProjectKey = ($Root -replace '[^a-zA-Z0-9]', '-')
+# ⚠️ Уникальность слага проверяется по ДВУМ областям сразу: от корня пространства и от каталога, где
+# пул создаётся. Раньше проверялась только вторая, и вызов с -WorkspaceRoot <подкаталог проекта>
+# сужал гард ДО ЭТОГО ПОДКАТАЛОГА: пулы уровнем выше не виделись вовсе, и об этом ничего не
+# говорилось (боевой прогон компаньона: -WorkspaceRoot ~/workspace/sbs не видел ни <pool-a>, ни
+# shop-<organizer-pool>). Слаг — глобальный ключ, по нему пикер и запускает, и ГАСИТ пул.
+# Области СКЛАДЫВАЮТСЯ, а не выбираются: вопрос «лежит ли одно под другим» на Linux не отвечается —
+# Test-PathOverlap сравнивает пути только по обратному слэшу, и любой ответ там был бы выдуман.
+# -ExcludePath: манифест САМОГО целевого каталога конфликтом не считается. Без него повторный прогон
+# (-Force дозаливает недостающие файлы в уже раскатанный пул — законный сценарий) отказывал «слаг
+# занят», а занят он был сам собой. Видно только на настоящей раскатке: под -WhatIf манифеста ещё
+# нет, и проба зелёная.
+$__excl = [IO.Path]::Combine($Root, 'pool.manifest.json')   # не Join-Path: на несуществующем диске он БРОСАЕТ
+$__areas = @($SpaceRoot)
+$slugTaken = @(Get-SlugConflicts -Slug $Slug -WorkspaceRoot $SpaceRoot -ExcludePath $__excl)
+if (-not [string]::Equals(([string]$SpaceRoot).TrimEnd([char]92, [char]47), ([string]$WorkspaceRoot).TrimEnd([char]92, [char]47), [StringComparison]::OrdinalIgnoreCase)) {
+    $slugTaken += @(Get-SlugConflicts -Slug $Slug -WorkspaceRoot $WorkspaceRoot -ExcludePath $__excl)
+    $__areas   += $WorkspaceRoot
+}
+$slugTaken = @($slugTaken | Select-Object -Unique)
+if ($slugTaken.Count) { throw ((Get-GuardMessage 'slug') -f $Slug, $slugTaken[0]) }
 
 foreach ($r in $roleList) {
     $r | Add-Member -NotePropertyName display -NotePropertyValue ((To-Pascal $r.owner) + '-' + $DisplaySuffix)
@@ -124,15 +266,24 @@ $ownersInline = ($roleList.owner | ForEach-Object { '`' + $_ + '`' }) -join ', '
 $roleCount   = $roleList.Count
 
 # markdown roles table rows (CLAUDE.md / README / pool-roles)
+# Чем роль поднимается — в текстах пула это упоминается в трёх таблицах. На сервере это не .bat,
+# а окно фермы: обёртка одна на пул, роль передаётся ей аргументом.
+function Get-RunHint([string]$owner) {
+    if ($script:OnWindows) { 'claude-{0}.bat' -f $owner } else { 'scripts/role.sh {0}' -f $owner }
+}
 $rowsClaude = ($roleList | ForEach-Object {
-    '| `' + $_.owner + '` | `' + $_.display + '` | ' + $_.label + ' | `claude-' + $_.owner + '.bat` |'
+    '| `' + $_.owner + '` | `' + $_.display + '` | ' + $_.label + ' | `' + (Get-RunHint $_.owner) + '` |'
 }) -join "`n"
 $rowsWrappers = ($roleList | ForEach-Object {
-    $note = if ($_.isLead) { ' (лид; при старте открывает живую доску)' } else { '' }
-    '| `claude-' + $_.owner + '.bat` | ' + $_.label + $note + ' |'
+    $note = if ($_.isLead -and $script:OnWindows) { ' (лид; при старте открывает живую доску)' } else { '' }
+    '| `' + (Get-RunHint $_.owner) + '` | ' + $_.label + $note + ' |'
 }) -join "`n"
 
-$boardCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\.launcher\pool-bus\board-window.ps1" -BusRoot "' + $Bus + '"'
+# Доска отдельным окном — только на рабочей машине. На сервере окон нет: доска живёт окном tmux
+# (`board`), его поднимает pool-up.sh вместе с пулом, поэтому обёртке лида добавлять нечего.
+$boardCmd = if ($script:OnWindows) {
+    'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $WsBoardTool + '" -BusRoot "' + $Bus + '"'
+} else { '' }
 
 # ---- shared coordination block (CLAUDE.md + onboarding) ------------------
 # Slim: knowledge lives in skills (coordinating-on-the-pool-bus / operating-in-a-pool)
@@ -140,7 +291,7 @@ $boardCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-roo
 # for live sessions that predate skill discovery.
 $COORD = @'
 ### Координация с соседями — через `pool` (НЕ через Tasks API)
-Задача соседу / ответ / отчёт / доска — командой `pool` (maildir-шина), НЕ `TaskCreate`/`TaskUpdate`. Команды и правила — скил **`coordinating-on-the-pool-bus`**; онбординг/вотчер/выход сессии — скил **`operating-in-a-pool`**. Прямой доступ без скилов: `& "<workspace-root>\.references\ref.ps1" pool-coordination`. Крупные материалы — файлом, в сообщении — ссылка на путь. Личные todo — `TaskCreate(metadata={kind:"personal"})`.
+Задача соседу / ответ / отчёт / доска — командой `pool` (maildir-шина), НЕ `TaskCreate`/`TaskUpdate`. Команды и правила — скил **`coordinating-on-the-pool-bus`**; онбординг/вотчер/выход сессии — скил **`operating-in-a-pool`**. Прямой доступ без скилов: `& "__REF__" pool-coordination`. Крупные материалы — файлом, в сообщении — ссылка на путь. Личные todo — `TaskCreate(metadata={kind:"personal"})`.
 '@
 
 # ---- file bodies (single-quoted here-strings + token replace) -----------
@@ -152,11 +303,11 @@ $T_settings = @'
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" hook"
+            "command": "__HOOKCMD__ hook"
           },
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" activity"
+            "command": "__HOOKCMD__ activity"
           }
         ]
       }
@@ -166,7 +317,7 @@ $T_settings = @'
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" activity"
+            "command": "__HOOKCMD__ activity"
           }
         ]
       }
@@ -176,7 +327,7 @@ $T_settings = @'
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" activity"
+            "command": "__HOOKCMD__ activity"
           }
         ]
       }
@@ -186,7 +337,7 @@ $T_settings = @'
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"<workspace-root>\\.launcher\\pool-bus\\pool.ps1\" activity"
+            "command": "__HOOKCMD__ activity"
           }
         ]
       }
@@ -209,13 +360,23 @@ $T_mcp = @'
       "command": "npx",
       "args": [
         "chrome-devtools-mcp@latest",
-        "--user-data-dir=<workspace-root>\\.chrome-profiles\\${AGENT_OWNER:-_plain}"
+        "--user-data-dir=D:\\_workspace\\.chrome-profiles\\${AGENT_OWNER:-_plain}"
       ],
       "env": {}
     }
   }
 }
 '@
+
+# На сервере Chrome нет вовсе. Пустой список серверов лучше отсутствующего файла: иначе роль
+# унаследует глобальный браузерный MCP пространства и потратит первый ход на попытку его поднять.
+if (-not $script:OnWindows) {
+    $T_mcp = @'
+{
+  "mcpServers": {}
+}
+'@
+}
 
 $T_gitignore = @'
 # Claude Code local settings (per-machine; hook registration + MCP wiring w/ absolute paths)
@@ -300,12 +461,22 @@ $effortArgs = if ($Effort) { @('--effort', $Effort) } else { @() }
 # Role-private auto-memory: one store per AGENT_OWNER instead of one shared per-cwd pile.
 # Module lives in one place for the whole workspace (same model as pool.ps1).
 $memoryArgs = @()
-$agentMemoryModule = '<workspace-root>\.launcher\pool-bus\agent-memory.ps1'
+$agentMemoryModule = 'C:\workspace-root\.launcher\pool-bus\agent-memory.ps1'
 if (Test-Path $agentMemoryModule) {
     . $agentMemoryModule
     $memoryArgs = Get-AgentMemoryArgs
+} elseif ($env:POOL_ALLOW_SHARED_MEMORY -eq '1') {
+    Write-Host "[pool-launch] ВНИМАНИЕ: модуль памяти не найден ($agentMemoryModule) — роль поднимается с ОБЩЕЙ памятью, это разрешено POOL_ALLOW_SHARED_MEMORY=1."
 } else {
-    Write-Host "[pool-launch] WARNING: $agentMemoryModule not found - this role starts with SHARED memory."
+    # 🛑 Отказ, а не предупреждение. Предупреждение здесь печаталось в панель, которую первым же кадром
+    # затирает интерфейс движка ⇒ след виден только тому, кто смотрел в эту секунду. А роль при этом
+    # поднималась с ОБЩЕЙ памятью и без хуков сверки: записи уходили не туда, и обнаруживалось это в
+    # лучшем случае через сутки. Дверь оставлена явной переменной — на случай, когда общая память
+    # действительно задумана (память роли раскатана не везде).
+    Write-Host "[pool-launch] ОТКАЗ: не найден модуль памяти $agentMemoryModule"
+    Write-Host "  Без него роль поднялась бы с ОБЩЕЙ памятью и без хуков сверки — записи ушли бы не туда."
+    Write-Host "  Почини раскладку пространства, либо задай POOL_ALLOW_SHARED_MEMORY=1, если так и задумано."
+    exit 2
 }
 
 $sessionId = Find-SessionIdByTitle -Title $SessionTitle -Dir $projectDir
@@ -323,10 +494,139 @@ if ($sessionId) {
 exit $LASTEXITCODE
 '@
 
+# Серверный запускатель. Отличий от windows-оригинала ровно четыре, и все из-за ОС; логика подъёма
+# роли (возобновление по заголовку сессии) не менялась — это инвариант владельца:
+#   1. каталог транскриптов от $HOME (в PowerShell он есть на обеих платформах), а не от USERPROFILE;
+#   2. ключ проекта выводится из cwd этой машины, а не зашивается: у коллеги другой домашний каталог;
+#   3. общий модуль памяти лежит в пространстве пользователя, а не по абсолютному D:\...;
+#   4. `claude` резолвится явно — в неинтерактивной оболочке ~/.local/bin в PATH может не попасть.
+$T_poolLaunchLinux = @'
+# pool-launch.linux.ps1 - серверная версия (Linux, pwsh 7).
+
+param(
+    [string]$Effort = '',
+    [string]$Model = '',
+    [Parameter(Mandatory)][string]$SessionTitle,
+    [string]$ProjectKey = '',
+    [string]$InitialPromptFile = '',
+    # «Посчитай и уйди»: вместо запуска движка кладёт готовый список аргументов В ЭТОТ ФАЙЛ и выходит.
+    # Нужен, чтобы движок стартовал прямым потомком окна tmux, а pwsh не висел родителем всю жизнь
+    # роли. Именно файл, а не stdout: в stdout печатает и модуль памяти, и любой будущий вызов, а
+    # такая строка склеивается с первым аргументом — роли уже ложились со статусом 127.
+    # Разделитель внутри файла — нулевой байт: стартовый промпт многострочный.
+    [string]$ArgsFile = ''
+)
+
+$ErrorActionPreference = 'Continue'
+
+# Ключ проекта = путь рабочего каталога, где каждый не-буквенно-цифровой символ заменён дефисом.
+# Считаем сами, а не зашиваем: движок выводит его так же из своего рабочего каталога.
+if (-not $ProjectKey) {
+    $ProjectKey = ((Get-Location).Path -replace '[^A-Za-z0-9]', '-')
+}
+$projectDir = Join-Path $HOME (Join-Path '.claude' (Join-Path 'projects' $ProjectKey))
+
+try {
+    $janitor = Join-Path $PSScriptRoot 'archive-completed-tasks.ps1'
+    if ((Test-Path $janitor) -and $env:CLAUDE_CODE_TASK_LIST_ID) {
+        & $janitor -ListId $env:CLAUDE_CODE_TASK_LIST_ID -Quiet
+    }
+} catch { }
+
+function Find-SessionIdByTitle {
+    param([string]$Title, [string]$Dir)
+    if (-not (Test-Path $Dir)) { return $null }
+    $titleEscaped = [regex]::Escape($Title)
+    $matchPattern = '"customTitle":"' + $titleEscaped + '"'
+    $files = Get-ChildItem -Path $Dir -Filter '*.jsonl' -ErrorAction SilentlyContinue |
+             Sort-Object LastWriteTime -Descending
+    foreach ($f in $files) {
+        try {
+            $titleLines = Select-String -Path $f.FullName -Pattern '"customTitle":"[^"]*"' -ErrorAction Stop
+            if (-not $titleLines) { continue }
+            if ($titleLines[-1].Line -match $matchPattern) { return $f.BaseName }
+        } catch { continue }
+    }
+    return $null
+}
+
+$initPrompt = ''
+if ($InitialPromptFile -and (Test-Path $InitialPromptFile)) {
+    try { $initPrompt = [System.IO.File]::ReadAllText($InitialPromptFile, [System.Text.Encoding]::UTF8).Trim() } catch { $initPrompt = '' }
+}
+
+# Арм-гейт Stop-хука включается только для ролей с вотчером (они получают стартовый промпт).
+if ($InitialPromptFile) { $env:POOL_WATCHER = '1' }
+
+$modelArgs  = if ($Model)  { @('--model', $Model) }   else { @() }
+$effortArgs = if ($Effort) { @('--effort', $Effort) } else { @() }
+
+# Память роли: одна копия модуля на пространство, путь от корня пространства, а не абсолютный.
+$memoryArgs = @()
+$agentMemoryModule = Join-Path $HOME 'workspace/.launcher/pool-bus/agent-memory.ps1'
+if (Test-Path $agentMemoryModule) {
+    . $agentMemoryModule
+    $memoryArgs = Get-AgentMemoryArgs
+} elseif ($env:POOL_ALLOW_SHARED_MEMORY -eq '1') {
+    Write-Host "[pool-launch] ВНИМАНИЕ: модуль памяти не найден ($agentMemoryModule) — роль поднимается с ОБЩЕЙ памятью, это разрешено POOL_ALLOW_SHARED_MEMORY=1."
+} else {
+    # 🛑 Отказ, а не предупреждение. Предупреждение здесь печаталось в панель, которую первым же кадром
+    # затирает интерфейс движка ⇒ след виден только тому, кто смотрел в эту секунду. А роль при этом
+    # поднималась с ОБЩЕЙ памятью и без хуков сверки: записи уходили не туда, и обнаруживалось это в
+    # лучшем случае через сутки. Дверь оставлена явной переменной — на случай, когда общая память
+    # действительно задумана (память роли раскатана не везде).
+    Write-Host "[pool-launch] ОТКАЗ: не найден модуль памяти $agentMemoryModule"
+    Write-Host "  Без него роль поднялась бы с ОБЩЕЙ памятью и без хуков сверки — записи ушли бы не туда."
+    Write-Host "  Почини раскладку пространства, либо задай POOL_ALLOW_SHARED_MEMORY=1, если так и задумано."
+    exit 2
+}
+
+$claudeExe = 'claude'
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+    $candidate = Join-Path $HOME '.local/bin/claude'
+    if (Test-Path $candidate) { $claudeExe = $candidate }
+    else { Write-Host "[pool-launch] WARNING: 'claude' не найден ни в PATH, ни в ~/.local/bin" }
+}
+
+$sessionId = Find-SessionIdByTitle -Title $SessionTitle -Dir $projectDir
+
+# Аргументы движка собираются ОДНИМ списком: он либо исполняется здесь, либо отдаётся вызывающему.
+$claudeArgs = @('--dangerously-skip-permissions') + $modelArgs + $effortArgs + $memoryArgs
+if ($sessionId) { $claudeArgs += @('--resume', $sessionId) } else { $claudeArgs += @('--name', $SessionTitle) }
+if ($initPrompt) { $claudeArgs += $initPrompt }
+
+$note = if ($sessionId) { "[pool-launch] Resuming '$SessionTitle' (session $sessionId)" }
+        else            { "[pool-launch] No prior session '$SessionTitle' found - starting fresh." }
+
+if ($ArgsFile) {
+    # Режим «посчитай и уйди»: движок запускает сам вызывающий (role.sh делает exec), поэтому pwsh
+    # не остаётся висеть родителем на всё время жизни роли — это ~135 МиБ на роль ни за что.
+    #
+    # 🛑 Аргументы отдаются ФАЙЛОМ, а не через stdout, и это не стиль, а единственный надёжный способ.
+    # Первая версия печатала их в stdout — и роли легли со статусом 127: строку «[agent-memory] <роль>
+    # -> <каталог>» печатает МОДУЛЬ ПАМЯТИ, в pwsh при перенаправлении Write-Host идёт в поток, и она
+    # склеилась с путём к движку прямо в argv. Глушить конкретного печатающего (-Quiet у модуля) —
+    # лечение случая: завтра напечатает кто-то ещё, и роль снова не поднимется. Файл закрывает класс:
+    # stdout свободен для любой диагностики, включая полезную человеку в панели.
+    #
+    # Разделитель — НУЛЕВОЙ БАЙТ: стартовый промпт многострочный, любой строковый разделитель разорвал
+    # бы его на несколько аргументов. Читать: readarray -d '' ARR < "$файл".
+    Write-Host $note
+    $out = @($claudeExe) + $claudeArgs   # первым элементом сам движок: вызывающий делает exec "${ARR[@]}"
+    [IO.File]::WriteAllBytes($ArgsFile, [Text.Encoding]::UTF8.GetBytes(($out -join "`0")))
+    exit 0
+}
+
+Write-Host $note
+& $claudeExe @claudeArgs
+
+exit $LASTEXITCODE
+'@
+
 $T_startup = @'
 Старт пула.
 
-1. Взведи свой **вотчер** входящих: следуй скилу `operating-in-a-pool` (или прямо `& "<workspace-root>\.references\ref.ps1" pool-lifecycle`), раздел «Выход хода» — инструментом `Monitor` с `persistent: true`.
+1. Взведи свой **вотчер** входящих: следуй скилу `operating-in-a-pool` (или прямо `& "__REF__" pool-lifecycle`), раздел «Выход хода» — инструментом `Monitor` с `persistent: true`.
 2. Подтверди идентичность: `pool mine`.
 
 Дальше — по своему onboarding (`CLAUDE.md` → `_agent_pool_setup-<owner>.md`), жди задач. Если возобновлён в работе — проверь, что вотчер активен, и продолжай прерванное.
@@ -343,7 +643,9 @@ $T_janitor = @'
 
 param(
     [string]$ListId      = '__POOL__',
-    [string]$TasksRoot   = (Join-Path $env:USERPROFILE '.claude\tasks'),
+    # $HOME есть в PowerShell на обеих платформах; $env:USERPROFILE на Linux ПУСТ, и Join-Path с
+    # пустым первым аргументом не возвращает пустоту, а бросает — дворник падал бы на первом запуске.
+    [string]$TasksRoot   = (Join-Path $HOME (Join-Path '.claude' 'tasks')),
     [int]   $MinAgeHours = 12,
     [switch]$Quiet
 )
@@ -384,7 +686,7 @@ exit 0
 '@
 
 $T_scriptsReadme = @'
-# scripts/ — pool helpers (__NAME__)
+# scripts/ — pool helpers (__SLUG__)
 
 Служебные скрипты запуска пула. Двойной клик по `.bat` в корне репозитория — обычный способ старта; эти файлы дёргаются ими.
 
@@ -393,7 +695,7 @@ $T_scriptsReadme = @'
 | `pool-launch.ps1` | Запускает Claude Code в pool-режиме; ищет прошлую сессию по display name и **возобновляет** её (`--resume`), иначе стартует свежую (`--name`). |
 | `archive-completed-tasks.ps1` | Дворник стора задач: уносит завершённые личные todo из живого списка в `<list>-archive`. Безопасен (move, не delete). |
 
-Координация между ролями — через общую **pool-шину** (`<workspace-root>\.launcher\pool-bus\pool.ps1`), не через эти скрипты. Живая доска — `board-__NAME__.bat` в корне.
+Координация между ролями — через общую **pool-шину** (`__BUSTOOL__`), не через эти скрипты. Живая доска — `board-__SLUG__.bat` в корне.
 '@
 
 $T_claude = @'
@@ -408,7 +710,7 @@ $T_claude = @'
 - **Субагенты вместо своего контекста.** Рутину и параллельные куски делегируй субагентам; свой контекст береги для синтеза и решений.
 - **Автономность до результата.** Пойми образ результата и работай автономно до него. Остановись и спроси только если: решение ответственное / вне твоей зоны; вскрылась развилка без контекста; нужен peer (поставил задачу — пингани). Иначе — разумный дефолт, причину зафиксируй, продолжай.
 
-Полная версия — `<workspace-root>\.launcher\standards\working-principles.md`.
+Полная версия — `__PRINCIPLES__`.
 
 ## Шаг 1. Определи режим работы
 
@@ -440,7 +742,8 @@ __ROWS_CLAUDE__
 
 ## Шаг 3. Общие правила
 
-- **Workspace = зона пула.** Пиши в любую часть `__ROOT__` кроме `.bus/` (служебная шина) и `.claude/`. Зоны записи по ролям — см. `pool-roles.md` и свой onboarding.
+- **Workspace = зона пула.** Пиши в любую часть `__ROOT__` кроме `.bus/` (служебная шина), `.claude/` и чужих каталогов памяти `.memory/<другая роль>/`. Зоны записи по ролям — см. `pool-roles.md` и свой onboarding.
+- **Чужая память — на чтение, не на запись.** Свой `.memory/<твоя роль>/` пишешь только ты; в чужой не пишешь и ничего оттуда не удаляешь, даже увидев устаревшее: там чужие открытые хвосты, и пропажу не заметит ни ты, ни владелец записи. Ошибку в чужой памяти — письмом её владельцу по шине. Источник правила при расхождении — `& "__REF__" pool-lifecycle`. ⚠️ **Появился у пула собственный свод правил — правило переносится ТУДА, а здесь остаётся одна строка со ссылкой:** две редакции одного правила хуже одной, работать будут по той, что короче и ближе.
 - **Конвейер.** TODO (лид заполнит в `00_docs/pool-roles.md`): кто за кем, где гейты/приёмка.
 __COORD__
 
@@ -451,7 +754,7 @@ __COORD__
 - `_agent_pool_setup-<owner>.md` — onboarding по каждой роли.
 - `.memory/<owner>/` — долговременная память роли между запусками (файл на предмет, индекс `MEMORY.md` грузится сам).
 - Координация — скилы `coordinating-on-the-pool-bus` / `operating-in-a-pool`.
-- `<workspace-root>\.launcher\standards\working-principles.md` — принципы работы агентов.
+- `__PRINCIPLES__` — принципы работы агентов.
 '@
 
 $T_readme = @'
@@ -466,7 +769,7 @@ $T_readme = @'
 | Файл | Роль |
 |------|------|
 __ROWS_WRAPPERS__
-| `board-__NAME__.bat` | Живая доска пула (кто чем занят) — отдельным окном |
+| `board-__SLUG__.bat` | Живая доска пула (кто чем занят) — отдельным окном |
 
 Запускай те роли, что нужны прямо сейчас; необязательно все разом.
 
@@ -539,7 +842,7 @@ __TYPING__Скилы по необходимости (`superpowers:verification-
 '@
 
 $T_poolRoles = @'
-# Роли и конвейер пула __NAME__
+# Роли и конвейер пула __SLUG__
 
 Pool `__POOL__` — __COUNT__ ролей. Цель: __TITLE__.
 
@@ -561,7 +864,7 @@ __ROWS_CLAUDE__
 
 ## Координация
 
-Между ролями — только через `pool` (maildir-шина), не Tasks API. Команды и правила — скил `coordinating-on-the-pool-bus`; онбординг/вотчер/выход сессии — скил `operating-in-a-pool`; прямой доступ — `& "<workspace-root>\.references\ref.ps1" pool-coordination`. Живая доска — `board-__NAME__.bat`.
+Между ролями — только через `pool` (maildir-шина), не Tasks API. Команды и правила — скил `coordinating-on-the-pool-bus`; онбординг/вотчер/выход сессии — скил `operating-in-a-pool`; прямой доступ — `& "__REF__" pool-coordination`. Живая доска — `board-__SLUG__.bat`.
 '@
 
 $T_sbReadme = @'
@@ -632,7 +935,7 @@ $SK_windows = @'
 Выполни и следуй выводу:
 
 ```powershell
-& "<workspace-root>\.references\ref.ps1" windows
+& "__REF__" windows
 ```
 '@
 $SK_secrets = @'
@@ -641,7 +944,7 @@ $SK_secrets = @'
 Выполни и следуй выводу:
 
 ```powershell
-& "<workspace-root>\.references\ref.ps1" secrets
+& "__REF__" secrets
 ```
 
 **Жёсткое правило:** значение секрета не печатается никогда — ни в терминал, ни в лог, ни в отчёт. Проверяй наличие/длину, не значение.
@@ -652,7 +955,7 @@ $SK_coord = @'
 Выполни и следуй выводу:
 
 ```powershell
-& "<workspace-root>\.references\ref.ps1" pool-coordination
+& "__REF__" pool-coordination
 ```
 
 **Жёсткое правило — сбой шины:** ошибка `pool: owner/bus not set`, нет баннера, падает pool.ps1 → это инфраструктура пула, НЕ твоя зона.
@@ -666,7 +969,7 @@ $SK_lifecycle = @'
 Выполни и следуй выводу:
 
 ```powershell
-& "<workspace-root>\.references\ref.ps1" pool-lifecycle
+& "__REF__" pool-lifecycle
 ```
 '@
 $SK_techlead = @'
@@ -675,7 +978,7 @@ $SK_techlead = @'
 Выполни и следуй выводу:
 
 ```powershell
-& "<workspace-root>\.references\ref.ps1" tech-lead
+& "__REF__" tech-lead
 ```
 '@
 $SK_qa = @'
@@ -684,7 +987,7 @@ $SK_qa = @'
 Выполни и следуй выводу:
 
 ```powershell
-& "<workspace-root>\.references\ref.ps1" qa
+& "__REF__" qa
 ```
 '@
 # name -> @{ desc; body }. Base 4 go to every pool; typing 2 added by role-name match.
@@ -710,6 +1013,7 @@ function Apply([string]$tmpl, [hashtable]$map) {
 
 $baseMap = @{
     '__NAME__'          = $Name
+    '__SLUG__'          = $Slug
     '__POOL__'          = $Pool
     '__ROOT__'          = $Root
     '__BUS__'           = $Bus
@@ -720,7 +1024,205 @@ $baseMap = @{
     '__ROWS_CLAUDE__'   = $rowsClaude
     '__ROWS_WRAPPERS__' = $rowsWrappers
     '__COORD__'         = $COORD
+    # Пути инструментов пространства: на рабочей машине те же, что были зашиты, на сервере — от $HOME.
+    '__REF__'           = $WsRefTool
+    '__PRINCIPLES__'    = $WsPrinciples
+    '__BUSTOOL__'       = $WsBusTool
+    '__HOOKCMD__'       = $HookCmdJson
+    # Чем человек запускает роль. Разное по платформам, а в текстах пула упоминается часто.
+    '__RUNROLE__'       = $(if ($script:OnWindows) { 'claude-<owner>.bat' } else { 'scripts/role.sh <owner>' })
 }
+
+# ---- серверная обвязка роли ---------------------------------------------
+# На рабочей машине роль поднимает свой .bat. На сервере окно tmux зовёт одну обёртку на весь пул,
+# а всё, что отличает роль от роли, лежит рядом данными: roles.tsv (заголовок сессии, усилие,
+# вотчер) и pool.env (список задач, модель). Так добавление роли лидом — это строка в таблице,
+# а не правка кода.
+$T_roleSh = @'
+#!/usr/bin/env bash
+# Обёртка роли пула — серверная, одна на весь пул. Аналог claude-<owner>.bat с рабочей машины.
+#
+#   role.sh <роль> [--dry-run]
+#
+# Запускается ВНУТРИ окна tmux (окно = роль): exec отдаёт панель движку, чтобы владелец,
+# подключившись, увидел живую сессию.
+#
+# ⚠️ Роли, которой нет в roles.tsv, обёртка НЕ поднимает и заголовок сессии не угадывает.
+# Заголовок — ручка возобновления разговора: промахнёшься на символ, и движок начнёт пустой
+# разговор вместо прежнего, а выглядеть это будет как успешный старт.
+set -euo pipefail
+
+# readarray -d '' появился в bash 4.4; на более старом отказ будет громким («invalid option»), но
+# невнятным. Проверяем сами и говорим, чего не хватает.
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 4 ]; }; then
+  echo "role.sh: нужен bash >= 4.4 (сейчас ${BASH_VERSION:-?}): без readarray -d '' список аргументов движка не прочитать" >&2
+  exit 2
+fi
+OWNER="${1:?укажи роль (см. scripts/roles.tsv)}"; shift || true
+DRY=0
+for a in "$@"; do case "$a" in --dry-run|-n) DRY=1 ;; esac; done
+
+POOL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TSV="$POOL/scripts/roles.tsv"
+ENVF="$POOL/scripts/pool.env"
+
+[ -f "$TSV" ] || { echo "нет описания ролей: $TSV" >&2; exit 2; }
+
+LINE="$(awk -F'\t' -v o="$OWNER" '$1 !~ /^#/ && $1 == o { print; exit }' "$TSV")"
+[ -n "$LINE" ] || {
+  echo "роль '$OWNER' не описана в $TSV. Известные:" >&2
+  awk -F'\t' '$1 !~ /^#/ && NF { print "  " $1 }' "$TSV" >&2
+  exit 2
+}
+
+TITLE="$(printf '%s' "$LINE" | cut -f2 | tr -d '\r')"
+EFFORT="$(printf '%s' "$LINE" | cut -f3 | tr -d '\r')"
+WATCHER="$(printf '%s' "$LINE" | cut -f4 | tr -d '\r')"
+# ⚠️ tr -d '\r' обязателен: таблицу правят и с Windows, и тогда в последнем поле приезжает «1\r»,
+# которое не равно «1». Роль молча стартует БЕЗ стартового промпта и без POOL_WATCHER, а подъём
+# продолжает ждать от неё хода — выглядит как зависание на ровном месте.
+# ⚠️ Пустое поле вотчера = «не указано», и трактуется как 1 — так же, как его понимает pool-up.sh.
+# Разойтись тут нельзя: у него пустое поле значит «ждать хода роли», и при обратном дефолте здесь
+# подъём ждал бы вечно события от роли, которой промпт не отправляли.
+if [ -z "${WATCHER:-}" ]; then
+  echo "role.sh: у роли '$OWNER' пустое поле вотчера в $TSV — считаю 1 (как pool-up.sh). Проставь 0 или 1 явно." >&2
+  WATCHER=1
+fi
+[ -n "$TITLE" ] || { echo "у роли '$OWNER' пустой заголовок сессии в $TSV" >&2; exit 2; }
+
+# ⚠️ unset ПЕРЕД сорсингом: без него состояние переменной отражает файл ПЛЮС унаследованное окружение
+# окна, и значение из профиля/tmux выдаётся за содержимое pool.env — молча и правдоподобно.
+unset POOL_TASK_LIST_ID POOL_MODEL
+TASK_LIST_ID=""; MODEL=""
+if [ -f "$ENVF" ]; then
+  # shellcheck disable=SC1090
+  . "$ENVF"
+  TASK_LIST_ID="${POOL_TASK_LIST_ID:-}"
+  MODEL="${POOL_MODEL:-}"
+fi
+# Три случая, и они РАЗНЫЕ. `none` — законное «список намеренно не пиним» (пул из одной роли: защита
+# от «роли растащили задачи по спискам» там без предмета). ПУСТАЯ строка остаётся ОТКАЗОМ: в этом же
+# файле пустое поле вотчера значит «не указано», и две противоположные трактовки пустоты в одном
+# месте — ловушка для человека, который правит pool.env через месяц.
+if [ "$TASK_LIST_ID" = "none" ] || [ "$TASK_LIST_ID" = "-" ]; then
+  TASK_LIST_ID=""
+  PIN_TASK_LIST=0
+else
+  [ -n "$TASK_LIST_ID" ] || { echo "нет POOL_TASK_LIST_ID в $ENVF (пусто = «забыли»; намеренно не пинить список — впиши none)" >&2; exit 2; }
+  PIN_TASK_LIST=1
+fi
+
+export AGENT_OWNER="$OWNER"
+if [ "$PIN_TASK_LIST" = "1" ]; then
+  export CLAUDE_CODE_TASK_LIST_ID="$TASK_LIST_ID"
+else
+  # ⚠️ «Не пиним» ≠ «не экспортируем»: переменная может прийти из окружения окна, и движок возьмёт
+  # унаследованное. Проверяется `printenv CLAUDE_CODE_TASK_LIST_ID` в окне ДО вызова этой обёртки.
+  unset CLAUDE_CODE_TASK_LIST_ID
+fi
+export POOL_BUS_ROOT="$POOL/.bus"
+export POOL_INBOX_QUIET=1
+
+# ⚠️ ~/.local/bin — там лежит обёртка `pool`, на которую ссылаются стартовый текст роли и вся
+# документация. Без этой строки роль получает «command not found» на ПЕРВОЙ ЖЕ команде из своего
+# онбординга (поймано на живом пуле 09.08). Идемпотентно: двойной прогон не плодит дублей в PATH.
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) PATH="$HOME/.local/bin:$PATH" ;;
+esac
+export PATH
+
+# Токен подписки пространства (файл режима 600). Не в argv и не в скрипте — только окружением.
+if [ -f "$HOME/.config/agents/env" ]; then
+  set -a; . "$HOME/.config/agents/env"; set +a
+fi
+
+PWSH="$HOME/.local/pwsh/pwsh"
+[ -x "$PWSH" ] || PWSH="$(command -v pwsh || true)"
+[ -n "$PWSH" ] && [ -x "$PWSH" ] || { echo "не найден pwsh" >&2; exit 2; }
+
+LAUNCHER="$POOL/scripts/pool-launch.linux.ps1"
+[ -f "$LAUNCHER" ] || { echo "нет запускателя: $LAUNCHER" >&2; exit 2; }
+
+ARGS=( -NoProfile -File "$LAUNCHER" -SessionTitle "$TITLE" )
+[ -n "$EFFORT" ] && ARGS+=( -Effort "$EFFORT" )
+[ -n "$MODEL" ]  && ARGS+=( -Model "$MODEL" )
+if [ "${WATCHER:-0}" = "1" ] && [ -f "$POOL/scripts/startup-prompt.md" ]; then
+  ARGS+=( -InitialPromptFile "$POOL/scripts/startup-prompt.md" )
+  # ⚠️ Арм-гейт Stop-хука включается этой переменной, а раньше её ставил ЗАПУСКАТЕЛЬ. Теперь он
+  # считает аргументы и умирает до старта движка, поэтому ставим здесь — иначе гейт замолчал бы у
+  # всех ролей разом, и заметили бы это не сразу.
+  export POOL_WATCHER=1
+fi
+
+cd "$POOL"
+
+if [ "$DRY" = "1" ]; then
+  echo "роль:         $OWNER"
+  echo "заголовок:    $TITLE"
+  echo "усилие:       ${EFFORT:-<по умолчанию>}"
+  echo "модель:       ${MODEL:-<по умолчанию>}"
+  echo "список задач: $([ "$PIN_TASK_LIST" = "1" ] && echo "$TASK_LIST_ID" || echo "НЕ пиним (POOL_TASK_LIST_ID=none)")"
+  echo "шина:         $POOL_BUS_ROOT"
+  echo "вотчер:       $([ "${WATCHER:-0}" = "1" ] && echo "да, стартовый промпт передаётся" || echo "нет")"
+  echo "аргументы:    $PWSH ${ARGS[*]} -ArgsFile <tmp>"
+  exit 0
+fi
+
+# Движок запускаем САМИ. Раньше здесь был exec pwsh, а pwsh уже запускал claude и оставался ждать
+# родителем на всё время жизни роли — ~135 МиБ на роль ни за что (замер фермы: обвязка = 40%).
+# Теперь запускатель считает аргументы, кладёт их в файл и уходит, а движок становится прямым
+# потомком окна tmux. ⚠️ Именно ФАЙЛ, а не stdout: в stdout печатает и модуль памяти, и любой
+# будущий вызов, и такая строка склеивается с первым аргументом (роли уже ложились со статусом 127).
+ARGF="$(mktemp "${TMPDIR:-/tmp}/pool-launch-argv.XXXXXX")"
+trap 'rm -f "$ARGF"' EXIT INT TERM HUP
+if ! "$PWSH" "${ARGS[@]}" -ArgsFile "$ARGF"; then
+  echo "запускатель завершился с ошибкой — роль не поднята" >&2
+  exit 2
+fi
+CLAUDE_ARGV=()
+readarray -d '' CLAUDE_ARGV < "$ARGF"
+if [ "${#CLAUDE_ARGV[@]}" -eq 0 ]; then
+  echo "запускатель не вернул аргументов (см. сообщения выше) — роль не поднята" >&2
+  exit 2
+fi
+# Файл удаляем ДО exec: exec заменяет процесс, и trap уже не сработает.
+rm -f "$ARGF"
+trap - EXIT
+exec "${CLAUDE_ARGV[@]}"
+'@
+
+$T_poolEnv = @'
+# Общие параметры запуска пула __SLUG__. Читает scripts/role.sh.
+# Модель пиним всем ролям: без явного --model сессия при --resume восстанавливается на своей старой
+# модели, а глобальный /model владельца протекает во все пулы разом.
+# POOL_TASK_LIST_ID: идентификатор списка задач. Особые значения — `none` (или `-`): список намеренно
+# НЕ пиним, роль работает со списком по умолчанию. ПУСТАЯ строка значением не является: это «забыли
+# заполнить», и обёртка на ней отказывает.
+POOL_TASK_LIST_ID=__POOL__
+POOL_MODEL=__MODEL__
+'@
+
+# Таблица ролей: заголовок сессии = display (ровно то, что уходило в -SessionTitle в .bat),
+# усилие по канону, вотчер всем кроме серверных/devops-ролей (стандарт: их взводит человек).
+$rolesTsvHeader = @'
+# Данные запуска ролей пула. Разделитель — ТАБУЛЯЦИЯ, четыре поля:
+#   owner <TAB> заголовок сессии <TAB> усилие <TAB> вотчер (1 = получает стартовый промпт)
+# Заголовок сессии — ручка возобновления разговора. Менять нельзя никогда: другой заголовок
+# означает не «переименовали роль», а «начали пустой разговор вместо прежнего».
+# ⚠️ Вотчер 0 — это НЕ поломка: роль поднимается в ПУСТОЙ сеанс и первого хода не делает, пока
+# человек не напишет ей сам. По стандарту так живут devops и серверные роли (их входящие смотрит
+# человек). Всё, что ждёт от роли события «начала ход» — в том числе pool-up.sh — обязано такие роли
+# пропускать, иначе ждёт вечно: подъём висел восемь минут ровно по этой причине.
+'@
+# ⚠️ Перевод строки после шапки ОБЯЗАТЕЛЕН: here-string не включает последний перевод перед '@,
+# и без него первая роль слипается с последней строкой комментария — обёртка её не находит.
+# Поймано прогоном: лид пула оказался «не описан в roles.tsv».
+$rolesTsv = $rolesTsvHeader + "`n" + (($roleList | ForEach-Object {
+    $eff = if ($_.isLead) { $PoolLeadEffort } else { $PoolEffort }
+    $wch = if ($_.owner -match 'devops') { '0' } else { '1' }
+    "{0}`t{1}`t{2}`t{3}" -f $_.owner, $_.display, $eff, $wch
+}) -join "`n") + "`n"
 
 $created = @()
 $skipped = @()
@@ -736,7 +1238,16 @@ function Emit([string]$rel, [string]$content, [switch]$Crlf) {
     if ($WhatIf) { $script:created += $rel; return }
     $dir = Split-Path $full -Parent
     [void][System.IO.Directory]::CreateDirectory($dir)
-    [System.IO.File]::WriteAllText($full, $content, $script:U8NoBom)
+    # 🛑 .ps1 пишем С BOM, остальное — без. Windows PowerShell 5.1 читает .ps1 БЕЗ BOM как ANSI
+    # (cp1251), и тогда байты 0x91/0x92 внутри многобайтных UTF-8 символов превращаются в «умные»
+    # кавычки ‘ ’ — а движок считает их настоящими кавычками. Файл перестаёт ПАРСИТЬСЯ.
+    # Поймано песочницей 09.08: свежесозданный пул не поднимался вовсе — `pool-launch.ps1` падал с
+    # «The string is missing the terminator», хотя текст его синтаксически верен. Хватило ОДНОГО
+    # эмодзи в комментарии. Отказ невидим до первого запуска роли, а радиус — все новые пулы.
+    # ⚠️ Только .ps1: .sh с BOM ломается ещё хуже (shebang перестаёт быть первым байтом), .json с BOM
+    # не читается частью парсеров.
+    $enc = if ($rel -match '\.ps1$') { New-Object System.Text.UTF8Encoding($true) } else { $script:U8NoBom }
+    [System.IO.File]::WriteAllText($full, $content, $enc)
     $script:created += $rel
 }
 
@@ -784,6 +1295,20 @@ function Merge-Settings([string]$rel, [string]$content) {
     $script:merged += ("{0} (+{1} hook cmds, permissions preserved)" -f $rel, $added)
 }
 
+# ⚠️ Каркас в этом каталоге уже раскатан, а слаг просят другой. Emit НИКОГДА не переписывает
+# существующее, поэтому повторный прогон не переименовывает пул: он проходит вхолостую и кладёт
+# рядом ВТОРУЮ доску board-<новый слаг>.bat. Снаружи выглядит как успех (боевой прогон компаньона).
+# Миграционного пути нет намеренно: слаг задаёт заголовок сессии, а он — ручка возобновления
+# разговора, и переименование живого пула теряет транскрипты. Это ручная операция, не скриптовая.
+$__existing = Join-Path $Root 'pool.manifest.json'
+if (Test-Path $__existing) {
+    $__cur = $null
+    try { $__cur = [System.IO.File]::ReadAllText($__existing) | ConvertFrom-Json } catch { }
+    if ($__cur -and $__cur.slug -and ([string]$__cur.slug) -cne $Slug) {
+        throw ("в $Root уже раскатан пул '$($__cur.slug)', а запрошен слаг '$Slug'. Переименовывать генератор не умеет: существующие файлы он не трогает, прогон прошёл бы вхолостую и добавил вторую доску. Варианты: задать -Slug $($__cur.slug), снести каркас и раскатать заново, либо переименовать руками — но помни, что слаг задаёт заголовок сессии, а он ручка возобновления разговора.")
+    }
+}
+
 # guard
 if (-not $WhatIf) {
     if ((Test-Path $Root) -and @(Get-ChildItem $Root -Force -ErrorAction SilentlyContinue).Count -gt 0 -and -not $Force) {
@@ -793,28 +1318,39 @@ if (-not $WhatIf) {
 }
 
 Write-Host ""
-Write-Host "new-pool: $Name  (pool=$Pool, lead=$Lead, roles=$($roleList.owner -join ','))"
+Write-Host "new-pool: $Name  (slug=$Slug, pool=$Pool, lead=$Lead, roles=$($roleList.owner -join ','))"
 Write-Host "  root=$Root"
 Write-Host "  projectKey=$ProjectKey"
 Write-Host ""
 
 # infra
-Merge-Settings '.claude\settings.local.json' (Apply $T_settings $baseMap)   # blend hooks, keep existing permissions/hooks
+# ⚠️ Пути пишутся ТОЛЬКО через прямой слэш. На Linux 'scripts\pool-launch.ps1' — это не подкаталог,
+# а ОДНО имя файла с обратным слэшем внутри: пул собрался бы «успешно», а дерева бы не было. Windows
+# прямой слэш понимает везде, так что платформенной ветки тут не нужно — нужна дисциплина записи.
+Merge-Settings '.claude/settings.local.json' (Apply $T_settings $baseMap)   # blend hooks, keep existing permissions/hooks
 Emit '.mcp.json'                   $T_mcp   # per-agent Chrome profile (no token replace: ${AGENT_OWNER} is expanded by Claude Code at runtime)
 Merge-Gitignore '.gitignore'       (Apply $T_gitignore $baseMap)            # append only missing pool rules, keep existing
-Emit 'scripts\pool-launch.ps1'             (Apply $T_poolLaunch $baseMap)
-Emit 'scripts\startup-prompt.md'           $T_startup
-Emit 'scripts\archive-completed-tasks.ps1' (Apply $T_janitor $baseMap)
-Emit 'scripts\README.md'                   (Apply $T_scriptsReadme $baseMap)
+if ($script:OnWindows) {
+    Emit 'scripts/pool-launch.ps1'         (Apply $T_poolLaunch $baseMap)
+} else {
+    # Серверная тройка: запускатель, одна обёртка на пул и данные ролей рядом с ней.
+    Emit 'scripts/pool-launch.linux.ps1'   $T_poolLaunchLinux
+    Emit 'scripts/role.sh'                 $T_roleSh
+    Emit 'scripts/pool.env'                (Apply $T_poolEnv ($baseMap + @{ '__MODEL__' = $PoolModel }))
+    Emit 'scripts/roles.tsv'               $rolesTsv
+}
+Emit 'scripts/startup-prompt.md'           $T_startup
+Emit 'scripts/archive-completed-tasks.ps1' (Apply $T_janitor $baseMap)
+Emit 'scripts/README.md'                   (Apply $T_scriptsReadme $baseMap)
 Emit 'CLAUDE.md'                   (Apply $T_claude $baseMap)
 Emit 'README.md'                   (Apply $T_readme $baseMap)
-Emit '00_docs\README.md'           (Apply $T_docsReadme $baseMap)
-Emit '00_docs\pool-roles.md'       (Apply $T_poolRoles $baseMap)
-Emit '00_docs\source-brief\README.md' (Apply $T_sbReadme $baseMap)
-Emit '00_docs\source-brief\brief.md'  (Apply $T_brief $baseMap)
-Emit '05_deliverables\README.md'   (Apply $T_delivReadme $baseMap)
-Emit '01_tasks\.gitkeep'           ''
-Emit '05_deliverables\.gitkeep'    ''
+Emit '00_docs/README.md'           (Apply $T_docsReadme $baseMap)
+Emit '00_docs/pool-roles.md'       (Apply $T_poolRoles $baseMap)
+Emit '00_docs/source-brief/README.md' (Apply $T_sbReadme $baseMap)
+Emit '00_docs/source-brief/brief.md'  (Apply $T_brief $baseMap)
+Emit '05_deliverables/README.md'   (Apply $T_delivReadme $baseMap)
+Emit '01_tasks/.gitkeep'           ''
+Emit '05_deliverables/.gitkeep'    ''
 
 # per-role wrappers + onboarding
 $rowsOnboard = ($roleList | ForEach-Object {
@@ -833,7 +1369,7 @@ foreach ($r in $roleList) {
 
     $wrapper = @'
 @echo off
-REM Wrapper: __OWNER__ agent for __NAME__ (pool __POOL__).
+REM Wrapper: __OWNER__ agent for __SLUG__ (pool __POOL__).
 REM Bus-native: coordination via shared pool.ps1 (maildir). Auto-resume by session title.
 
 set AGENT_OWNER=__OWNER__
@@ -860,25 +1396,30 @@ if errorlevel 1 pause
     $rmap['__TYPING__']     = $typing
     $rmap['__ROWS_ONBOARD__'] = $rowsOnboard
 
-    Emit ("claude-{0}.bat" -f $r.owner) (Apply $wrapper $rmap) -Crlf
+    # Обёртка роли: на рабочей машине — своя .bat рядом с пулом; на сервере роль поднимает окно tmux
+    # через scripts/role.sh, а человеку нужна витринная обёртка со ssh — она собирается ниже, в _windows/.
+    if ($script:OnWindows) { Emit ("claude-{0}.bat" -f $r.owner) (Apply $wrapper $rmap) -Crlf }
     Emit ("_agent_pool_setup-{0}.md" -f $r.owner) (Apply $T_onboard $rmap)
 }
 
 # board launcher
 $boardBat = @'
 @echo off
-REM Open the live pool board for __NAME__ in a separate terminal window.
+REM Open the live pool board for __SLUG__ in a separate terminal window.
 REM Idempotent: if a board window for this bus is already open, does nothing.
-powershell -NoProfile -ExecutionPolicy Bypass -File "<workspace-root>\.launcher\pool-bus\board-window.ps1" -BusRoot "__BUS__"
+powershell -NoProfile -ExecutionPolicy Bypass -File "__BOARDTOOL__" -BusRoot "__BUS__"
 '@
-Emit ("board-{0}.bat" -f $Name) (Apply $boardBat $baseMap) -Crlf
+# На сервере отдельного окна доски нет: она живёт окном tmux, которое поднимает pool-up.sh.
+if ($script:OnWindows) { Emit ("board-{0}.bat" -f $Slug) (Apply $boardBat ($baseMap + @{ '__BOARDTOOL__' = $WsBoardTool })) -Crlf }
 
 # skill stubs -> <root>\.claude\skills\<name>\SKILL.md (in git; discovered by pool agents at cwd)
 function Emit-Skill([string]$name, [string]$desc, [string]$body) {
-    Emit (".claude\skills\{0}\SKILL.md" -f $name) ("---`nname: {0}`ndescription: {1}`n---`n`n{2}`n" -f $name, $desc, $body)
+    Emit (".claude/skills/{0}/SKILL.md" -f $name) ("---`nname: {0}`ndescription: {1}`n---`n`n{2}`n" -f $name, $desc, $body)
 }
 # base 4 — every pool agent
-Emit-Skill 'avoiding-windows-pitfalls'    $D_win $SK_windows
+# Скил о ловушках Windows на сервере вреден: он учит обходить то, чего здесь нет, и занимает место
+# в контексте роли. Остальные три предметны на обеих платформах.
+if ($script:OnWindows) { Emit-Skill 'avoiding-windows-pitfalls' $D_win $SK_windows }
 Emit-Skill 'handling-secrets-safely'      $D_sec $SK_secrets
 Emit-Skill 'coordinating-on-the-pool-bus' $D_coo $SK_coord
 Emit-Skill 'operating-in-a-pool'          $D_lif $SK_lifecycle
@@ -896,13 +1437,113 @@ $manifestRoles = @($roleList | ForEach-Object {
     $h
 })
 $manifest = [ordered]@{
-    schema = 'pool-manifest/v1'; slug = $Name; title = $Name; project = $Title; root = $Root; lead = $Lead; roles = $manifestRoles
+    schema = 'pool-manifest/v1'; slug = $Slug; title = $PoolTitle; project = $Title; root = $Root; lead = $Lead; roles = $manifestRoles
 }
 Emit 'pool.manifest.json' ($manifest | ConvertTo-Json -Depth 6)
-foreach ($r in $roleList) {
-    $cmd  = 'cmd /c "{0}\claude-{1}.bat"' -f $Root, $r.owner
-    $yaml = "---`nname: `"> Запустить: {0}`"`ncommand: '{1}'`ndescription: `"Старт '{2}' пула {3}`"`ntags: [`"pool:{3}`"]`n" -f $r.label, $cmd, $r.owner, $Name
-    Emit (".warp\workflows\{0}.yaml" -f $r.owner) $yaml
+if ($script:OnWindows) {
+    foreach ($r in $roleList) {
+        $cmd  = 'cmd /c "{0}\claude-{1}.bat"' -f $Root, $r.owner
+        $yaml = "---`nname: `"> Запустить: {0}`"`ncommand: '{1}'`ndescription: `"Старт '{2}' пула {3}`"`ntags: [`"pool:{3}`"]`n" -f $r.label, $cmd, $r.owner, $Slug
+        Emit (".warp/workflows/{0}.yaml" -f $r.owner) $yaml
+    }
+} else {
+    # ---- витрина серверного пула --------------------------------------------
+    # Пул работает здесь, а открывает его человек со своей машины. Пикеру там нужны манифест и
+    # обёртки; собираем их ЗДЕСЬ, потому что источник истины о составе пула один — этот манифест.
+    # Лежат в _windows/ как в выходном лотке; забирает их pull-server-pool.ps1 с той стороны.
+    if (-not $WindowsRoot) {
+        # Витрина повторяет положение пула ОТНОСИТЕЛЬНО КОРНЯ ПРОСТРАНСТВА: пул в
+        # ~/workspace/sobesednik/shtab ложится в <workspace-root>\sobesednik\shtab.
+        # ⚠️ Только если пул ВНУТРИ пространства. Иначе вычитание длины даёт мусор — поймано
+        # прогоном в /tmp: корень витрины вышел «<workspace-root>\ol» (хвост чужого пути).
+        $rel = if ($Root.StartsWith($SpaceRoot)) {
+            $Root.Substring($SpaceRoot.Length).TrimStart('/', '\')
+        } else {
+            $Name   # пул вне пространства: положение витрины из пути не выводится, кладём по имени
+        }
+        $WindowsRoot = 'C:\workspace-root\' + ($rel -replace '/', '\')
+    }
+    $sshOpts = '-o IdentitiesOnly=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=9 -o TCPKeepAlive=no -t'
+
+    foreach ($r in $roleList) {
+        $bat = @"
+@echo off
+REM Обёртка роли $($r.owner) пула $Slug. Роль живёт НА СЕРВЕРЕ ($SshTarget).
+REM Локально ничего не запускается: панель подключается к живой сессии в ферме tmux.
+
+set AGENT_OWNER=$($r.owner)
+set CLAUDE_CODE_TASK_LIST_ID=$Pool
+title $($r.owner) - $Slug (server)
+
+ssh -i "$SshKey" $sshOpts $SshTarget "~/workspace/.launcher/console/enter.sh $Slug $($r.owner)"
+
+if errorlevel 1 pause
+"@
+        Emit ("_windows/claude-{0}.bat" -f $r.owner) ($bat + "`n") -Crlf
+        $cmd  = 'cmd /c "{0}\claude-{1}.bat"' -f $WindowsRoot, $r.owner
+        $yaml = "---`nname: `"> Запустить: {0}`"`ncommand: '{1}'`ndescription: `"Старт '{2}' пула {3}`"`ntags: [`"pool:{3}`"]`n" -f $r.label, $cmd, $r.owner, $Slug
+        Emit ("_windows/.warp/workflows/{0}.yaml" -f $r.owner) $yaml
+    }
+
+    $boardSsh = @"
+@echo off
+REM Доска пула $Slug. Пул на сервере, поэтому открывается пульт смены в ферме tmux.
+
+set AGENT_OWNER=board
+title $Slug board (server)
+
+ssh -i "$SshKey" $sshOpts $SshTarget "~/workspace/.launcher/console/enter.sh $Slug"
+
+if errorlevel 1 pause
+"@
+    Emit ("_windows/board-{0}.bat" -f $Slug) ($boardSsh + "`n") -Crlf
+
+    # Манифест витрины отличается от серверного ровно одним полем — корнем: пикер ищет обёртки у
+    # себя. Всё остальное (слаг, состав, ведущий) обязано совпадать, поэтому берётся из того же
+    # объекта, а не набирается заново.
+    $winManifest = [ordered]@{
+        schema = 'pool-manifest/v1'; slug = $Slug; title = $PoolTitle; project = $Title
+        root = $WindowsRoot; lead = $Lead; roles = $manifestRoles
+    }
+    Emit '_windows/pool.manifest.json' ($winManifest | ConvertTo-Json -Depth 6)
+
+    $pullNote = @"
+# _windows/ — витрина пула $Slug для рабочей машины
+
+Пул живёт на сервере; здесь лежит то, что нужно **на стороне человека**, чтобы его открыть:
+манифест для пикера, обёртки ролей со `ssh` и доска.
+
+Забрать одной командой с рабочей машины:
+
+    powershell -File C:\workspace-root\.launcher\pool-launcher\pull-server-pool.ps1 -Pool $Slug
+
+Разложится в ``$WindowsRoot``. Руками отсюда ничего копировать не надо, и **править обёртки на той
+стороне нельзя**: источник состава пула один — `pool.manifest.json` рядом с этим файлом. Изменился
+состав (лид добавил роль) — перезапусти стягивание, оно перезапишет витрину целиком.
+"@
+    Emit '_windows/README.md' $pullNote
+}
+
+# ---- серверные постусловия ------------------------------------------------
+if (-not $script:OnWindows -and -not $WhatIf) {
+    # Обёртка обязана быть исполняемой: окно tmux зовёт её напрямую, и неисполняемый файл выглядит
+    # как «роль не поднялась», без внятной причины в панели.
+    try { & chmod '+x' (Join-Path $Root 'scripts/role.sh') 2>$null } catch { }
+
+    # Первый запуск роли в НОВОМ каталоге упирается в диалог доверия и молча ждёт человека внутри
+    # окна tmux. Каталог создали мы сами, поэтому доверие проставляем заранее — иначе подъём пула
+    # выглядит как зависший старт.
+    try {
+        $cj  = Join-Path $HOME '.claude.json'
+        $cfg = if (Test-Path $cj) { [System.IO.File]::ReadAllText($cj, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } else { [pscustomobject]@{} }
+        if (-not $cfg.PSObject.Properties['projects']) { $cfg | Add-Member -NotePropertyName projects -NotePropertyValue ([pscustomobject]@{}) }
+        if (-not $cfg.projects.PSObject.Properties[$Root]) { $cfg.projects | Add-Member -NotePropertyName $Root -NotePropertyValue ([pscustomobject]@{}) }
+        $cfg.projects.$Root | Add-Member -NotePropertyName hasTrustDialogAccepted -NotePropertyValue $true -Force
+        [System.IO.File]::WriteAllText($cj, ($cfg | ConvertTo-Json -Depth 30), $script:U8NoBom)
+        Write-Host "  доверие каталогу проставлено: $Root"
+    } catch {
+        Write-Host "  ⚠ доверие каталогу проставить не удалось ($_). Первая роль встанет на диалоге."
+    }
 }
 
 # ---- report --------------------------------------------------------------
@@ -917,5 +1558,11 @@ if ($WhatIf) {
     Write-Host "Next:"
     Write-Host "  1. Fill 00_docs/source-brief/brief.md (the parametric frame)."
     Write-Host "  2. Fill TODO stubs: role missions in _agent_pool_setup-*.md, conveyor in 00_docs/pool-roles.md."
-    Write-Host "  3. Launch a role: claude-$Lead.bat   |  board: board-$Name.bat"
+    if ($script:OnWindows) {
+        Write-Host "  3. Launch a role: claude-$Lead.bat   |  board: board-$Slug.bat"
+    } else {
+        Write-Host "  3. Поднять пул:   ~/workspace/.launcher/scripts/pool-up.sh $Root"
+        Write-Host "  4. Забрать витрину НА РАБОЧЕЙ МАШИНЕ, иначе пул не появится в пикере:"
+        Write-Host "     powershell -File C:\workspace-root\.launcher\pool-launcher\pull-server-pool.ps1 -Pool $Slug"
+    }
 }

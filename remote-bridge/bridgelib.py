@@ -1,6 +1,6 @@
 """Общий движок remote-bridge: Telegram <-> живая Claude-сессия (удалённый пульт).
 
-ОДНА копия кода на весь workspace (<workspace-root>\\.launcher\\pool-bus\\remote-bridge\\),
+ОДНА копия кода на весь workspace (D:\\_workspace\\.launcher\\pool-bus\\remote-bridge\\),
 по образцу pool.ps1. Инстанс НЕ задаётся расположением кода — он задаётся окружением
 (REMOTE_BRIDGE_PROJECT_DIR / POOL_BUS_ROOT) или аргументом --project-dir. Инстанс-раскладка:
     <project>/secrets/bot.token
@@ -10,7 +10,7 @@
     <data>/inbox|outbox|media|state|bridge-logs   (<data> = <project>/03_data или cfg.data_dir)
 
 Модель доверия: гард — allowlist-of-one по числовому user_id владельца, поэтому его
-сообщения = его распоряжения цели (обратно модели группового чата). Сам модуль текст не
+сообщения = его распоряжения цели (обратно <pool-a>). Сам модуль текст не
 интерпретирует и никогда не печатает токен (URL Bot API содержит токен — все сетевые
 исключения санитизируются).
 """
@@ -27,7 +27,7 @@ import urllib.request
 from pathlib import Path
 
 # Общий bus-CLI (для резервного wake-note в pool-режиме).
-POOL_PS1 = Path(r"<workspace-root>\.launcher\pool-bus\pool.ps1")
+POOL_PS1 = Path(r"C:\workspace-root\.launcher\pool-bus\pool.ps1")
 
 MAX_TEXT_CHARS = 16 * 1024          # анти-DoS журнала (граница доверия)
 MAX_FILE_BYTES = 20 * 1024 * 1024   # лимит getFile Bot API
@@ -133,6 +133,59 @@ def load_manifest() -> dict | None:
     if not MANIFEST_PATH or not MANIFEST_PATH.exists():
         return None
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+# ------------------------------------------------- адресная лента (per_target_inbox)
+#
+# Требование владельца (03.08.2026): «сейчас получится, что мы переключимся, и все мои
+# сообщения уйдут к ведущему, и он будет пытаться разобраться, что относилось к нему, а что
+# нет». Сообщение принадлежит той цели, что была актуальна В МОМЕНТ ПРИХОДА; после /switch
+# весь поток до следующего переключения — новой цели; прочим не показывается.
+#
+# ВКЛЮЧАЕТСЯ ФЛАГОМ КОНФИГА, а не выводится из mode. Причина конкретная: mode говорит про
+# схему конфига, а не про то, сколько ролей реально читает ленту. У <pool-name>
+# mode=pool, но штатный читатель там `operator`, который целью НЕ является; у
+# <sub-b> то же с `dev-internal-div`. Вывод по mode ослепил бы обоих молча —
+# код-то общий на весь workspace и вступает в силу без их перезапуска.
+RE_OWNER = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def reader_owner() -> str | None:
+    """Роль читателя из AGENT_OWNER. Значение уходит в ИМЯ файла курсора, поэтому
+    санитизируется здесь, а не по месту использования."""
+    v = (os.environ.get("AGENT_OWNER") or "").strip()
+    if not v or not RE_OWNER.match(v):
+        return None
+    return v
+
+
+def per_target_inbox(cfg: dict) -> bool:
+    return bool((cfg or {}).get("per_target_inbox", False))
+
+
+def cursor_path(cfg: dict, owner: str | None) -> Path:
+    """Курсор чтения: свой на роль при включённом флаге, иначе прежний общий.
+    ЕДИНСТВЕННОЕ место, где решается этот путь — иначе счётчик и читатель разъедутся
+    (ровно тот класс расфазировки, что дал баг 001-b в should_wake)."""
+    if per_target_inbox(cfg) and owner:
+        return STATE_DIR / f"target-cursor-{owner}.json"
+    return STATE_DIR / "target-cursor.json"
+
+
+def rec_visible_to(rec: dict, cfg: dict, owner: str | None) -> bool:
+    """Видна ли запись читателю. FAIL-OPEN: запись БЕЗ метки видна всем.
+
+    Fail-open, а не fail-closed, по двум причинам. (1) Читатели получают новый код сразу
+    при сохранении файла, а пишущий процесс моста — только после перезапуска: в это окно
+    записи идут без метки, и fail-closed отдал бы их роли, которая целью уже не является,
+    то есть сообщение владельца не увидел бы НИКТО. (2) Вся накопленная история метки не
+    имеет; всплыть заново она не может — курсоры всех инстансов стоят в конце журнала."""
+    if not per_target_inbox(cfg) or not owner:
+        return True
+    t = rec.get("target")
+    if not t:
+        return True
+    return str(t) == owner
 
 
 # -------------------------------------------------------------------- токен
@@ -299,9 +352,42 @@ def write_json(path: Path, value) -> None:
     path.write_text(text, encoding="utf-8")  # не атомарно, но лучше падения
 
 
+def _read_proc_stat(pid: int) -> str:
+    """Сырая строка /proc/<pid>/stat. Отдельно от разбора — чтобы решение проверялось
+    тестом на любой платформе, а не только там, где /proc существует."""
+    with open("/proc/%d/stat" % int(pid), encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def _parse_proc_stat(raw: str) -> list:
+    """Поля /proc/<pid>/stat: [pid, state, ppid, ...] — имя процесса выброшено.
+
+    Режем по ПОСЛЕДНЕЙ закрывающей скобке: имя в скобках может содержать и пробелы, и сами
+    скобки, а разбор по первой разъезжает все поля следом.
+    """
+    tail = raw[raw.rindex(")") + 2:]
+    return [raw[:raw.index("(")].strip()] + tail.split()
+
+
+def _proc_alive(raw: str) -> bool:
+    """Жив ли процесс по строке stat. ЗОМБИ («Z») считается МЁРТВЫМ: запись в /proc у него
+    есть, процесса уже нет, и `os.kill(pid, 0)` для него успешен — то есть проверка по сигналу
+    соврала бы, и мёртвый процесс держал бы замок моста.
+    ⚠️ Состояние — поле [1]. Поле [0] это pid, и сравнение его с «Z» истинно ВСЕГДА: зомби
+    оказывается «жив», ровно наперекор замыслу. На этом уже спотыкались.
+    """
+    return _parse_proc_stat(raw)[1] != "Z"
+
+
 def pid_alive(pid: int) -> bool:
-    """Жив ли процесс (Windows). Свежий ts мёртвого процесса не должен блокировать
-    перезапуск/захват lock'а."""
+    """Жив ли процесс. Свежий ts мёртвого процесса не должен блокировать
+    перезапуск/захват lock'а. Ветка не-Windows — порт <peer-supervisor>'а: на Linux мост падал
+    при первом запуске с `AttributeError: module 'ctypes' has no attribute 'windll'`."""
+    if os.name != "nt":
+        try:
+            return _proc_alive(_read_proc_stat(pid))
+        except (OSError, ValueError, IndexError):
+            return False
     import ctypes
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     STILL_ACTIVE = 259

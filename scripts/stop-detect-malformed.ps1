@@ -21,7 +21,7 @@ param([switch]$SelfTest)
 $ErrorActionPreference = 'SilentlyContinue'
 
 $MARKER = 'malformed and could not be parsed'
-$NOTIFY = '<workspace-root>\.launcher\pool-bus\notify-malformed.ps1'
+$NOTIFY = 'C:\workspace-root\.launcher\pool-bus\notify-malformed.ps1'
 $LOG    = Join-Path $env:USERPROFILE '.claude\malformed-log.jsonl'
 
 # Analyze the NEW region of $transcriptPath since the byte length recorded in $stateFile, then advance
@@ -170,7 +170,7 @@ if ($SelfTest) {
 
   # --- new: log line write + JSON validity ---
   $tlog = Join-Path $tmp 'log.jsonl'
-  $rec = [ordered]@{ ts='2026-07-13T00:00:00'; owner='<role>'; pool='D:\p\.bus'; session='sid'; count=1; recovered=$true; snippet=$r7.Snippet; transcript=$t7 }
+  $rec = [ordered]@{ ts='2026-07-13T00:00:00'; owner='tech-lead-div'; pool='D:\p\.bus'; session='sid'; count=1; recovered=$true; snippet=$r7.Snippet; transcript=$t7 }
   Write-LogLine $tlog ($rec | ConvertTo-Json -Compress -Depth 4)
   Write-LogLine $tlog ($rec | ConvertTo-Json -Compress -Depth 4)
   $logLines = Get-Content -LiteralPath $tlog
@@ -178,7 +178,7 @@ if ($SelfTest) {
   $ok = $true; foreach ($ll in $logLines) { try { [void]($ll | ConvertFrom-Json) } catch { $ok = $false } }
   Chk $ok                     'T11 log: each line is valid JSON'
   $parsed = $logLines[0] | ConvertFrom-Json
-  Chk ($parsed.recovered -eq $true -and $parsed.owner -eq '<role>') 'T11 log: fields round-trip'
+  Chk ($parsed.recovered -eq $true -and $parsed.owner -eq 'tech-lead-div') 'T11 log: fields round-trip'
 
   Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
   Write-Host ''

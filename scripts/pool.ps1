@@ -191,6 +191,18 @@ function Invoke-Send([string]$toOwner,[string]$fromOwner,[string]$subj,[string]$
   $id
 }
 
+# 🛑 Карантин на время гашения. Пока в шине лежит intent-метка роли, ей НИЧЕГО не шлют: сторожа не
+# проверяют почту, баннер молчит. Требование владельца дословно: «с момента начала гашения вотчеры и
+# сторожа перестали вбрасывать данные. Чтобы я не опасался, что пока идёт хэндофф, прилетит новая
+# задача или сообщение. Почистимся, перезапустимся, и тогда пожалуйста.»
+# Метку ставит фаза 1 контроллера ПОСЛЕ отправки задачи завершения (иначе роль не проснулась бы на неё)
+# и снимает фаза 2 перед убийством. Прервали гашение — метка остаётся; её чистит запуск пула.
+# ⚠️ Проверять надо ДО Invoke-Check, а не глушить его вывод: Invoke-Check помечает разовые пинги
+# прочитанными в реестре, и «проверили, но промолчали» означало бы, что пинг не разбудит уже НИКОГДА.
+function Test-ShutdownQuiet([string]$o) {
+  if ([string]::IsNullOrWhiteSpace($o) -or [string]::IsNullOrWhiteSpace($BusRoot)) { return $false }
+  try { return (Test-Path (Join-Path (Join-Path $BusRoot '.control') ("shutdown-intent-{0}" -f $o))) } catch { return $false }
+}
 function Invoke-Inbox([string]$o) {
   Require-Bus
   $files = @(Get-ChildItem -Path (Sub-Dir $o 'new') -Filter '*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)
@@ -324,8 +336,16 @@ function Invoke-Dismiss([string]$o,[string]$mid) {
 # went silent forever. note-wake is the ONE exception: it is a one-shot ping (dismiss, not claim), so the ledger DOES
 # remember it - wake once, then quiet even while it still sits in new/. Signal = presence in new/ (+ ledger for
 # note-wake only), NOT mtime. On fire, ledger := the note-wake ids currently pending (tasks are deliberately not recorded).
-function Invoke-Check([string]$o) {
+function Invoke-Check([string]$o, [string]$OnlyFrom = '') {
   Require-Bus
+  # 🛑 $OnlyFrom — режим карантина гашения. Под intent-меткой сторож зовёт проверку ИМЕННО так:
+  # видит только письма контроллера и НЕ ТРОГАЕТ реестр `seen-<owner>`. Оба условия несущие.
+  # Пропускать контроллера обязательно: задача завершения доставляется роли той же побудкой, и
+  # «молчать обо всём» означало бы, что роль никогда о ней не узнает — гашение висело бы до таймаута
+  # (замерено оппонентом: сторож опрашивает раз в 20–45 с, метка встаёт за миллисекунды, так что
+  # перестановка порядка записи метки этого НЕ лечит — лечит только фильтр).
+  # Не трогать реестр обязательно: он подавляет повторные разовые пинги, и запись под карантином
+  # пометила бы проглоченный пинг виденным — он не разбудил бы роль уже никогда.
   $ledger = Join-Path (Ledger-Dir) ("seen-{0}.txt" -f $o)
   $seen = @{}
   if (Test-Path $ledger) { foreach ($l in [System.IO.File]::ReadAllLines($ledger)) { $t = "$l".Trim(); if ($t) { $seen[$t] = $true } } }
@@ -333,6 +353,7 @@ function Invoke-Check([string]$o) {
   $wake  = @()     # ids to wake on this pass
   foreach ($f in (Get-ChildItem -Path (Sub-Dir $o 'new') -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
     $p = Parse-MsgName $f.Name; if (-not $p) { continue }
+    if ($OnlyFrom -and $p.from -ne $OnlyFrom) { continue }     # quarantine: nobody but the controller
     if (-not (Is-Wakeable $f.Name)) { continue }               # quiet note / migration: never wakes
     if ($p.kind -eq 'note-wake') {
       $pings += $p.id
@@ -344,7 +365,7 @@ function Invoke-Check([string]$o) {
   if ($wake.Count -gt 0) {
     # Persist ONLY the note-wake pings. Tasks are intentionally not recorded: their suppressor is the claim
     # (file leaves new/), so an un-claimed task keeps waking each re-arm instead of starving after one silent fire.
-    [System.IO.File]::WriteAllLines($ledger, [string[]]$pings, $script:U8)
+    if (-not $OnlyFrom) { [System.IO.File]::WriteAllLines($ledger, [string[]]$pings, $script:U8) }   # quarantine never marks anything seen
     Write-Output ("[WAKE] {0}: {1} new" -f $o, $wake.Count)
     foreach ($n in $wake) { Write-Output ("   new: {0}" -f $n) }
   } else {
@@ -530,7 +551,8 @@ function Invoke-Watch([string]$o,[int]$interval) {
   while ($true) {
     if (Write-WatchLock $lock $PID $myStart) { $missed = 0 } else { $missed++ }
     if ($missed -eq 3) { Write-Output ("[WATCH] {0}: heartbeat lock is not writable ({1}) - the watcher is alive, but the board and the Stop arm-gate may stop seeing it. Check for a SECOND watcher of yours writing the same file." -f $o, $lock) }
-    $det = Invoke-Check $o
+    $qOnly = if (Test-ShutdownQuiet $o) { 'pool-controller' } else { '' }   # quarantine: only the controller gets through, ledger untouched
+    $det = Invoke-Check $o $qOnly
     if (($det -join "`n") -match '\[WAKE\]') {
       if (Test-Path $lock) { Remove-Item $lock -Force -ErrorAction SilentlyContinue }
       $ids = @()
@@ -587,7 +609,8 @@ function Invoke-Monitor([string]$o,[int]$interval) {
     if (Write-WatchLock $lock $PID $myStart) { $missed = 0 } else { $missed++ }
     # Say it, do not die of it: a monitor that beats into the void looks exactly like a monitor with no mail.
     if ($missed -eq 3) { Say-Mon ("[MONITOR] {0}: heartbeat lock is not writable ({1}) - I am alive, but the board and the Stop arm-gate may stop seeing me. Most likely a SECOND watcher of yours is writing the same file; tell Launcher if it persists." -f $o, $lock) }
-    $det = Invoke-Check $o                # captured, not printed: only OUR lines become notifications
+    $qOnly = if (Test-ShutdownQuiet $o) { 'pool-controller' } else { '' }   # quarantine: only the controller gets through, ledger untouched
+    $det = Invoke-Check $o $qOnly                # captured, not printed: only OUR lines become notifications
     $ids = @()
     if (($det -join "`n") -match '\[WAKE\]') {
       foreach ($line in $det) { $mm = [regex]::Match($line, 'new:\s*(\S+)'); if ($mm.Success) { $ids += $mm.Groups[1].Value } }
@@ -866,7 +889,7 @@ function Write-MemoryFooter([object[]]$Rows, [string]$Bus, [string]$Tag) {
   $sgr = if ($noIndex.Count -or $maxPct -ge 100) { '91' } elseif ($have -eq 0) { '93' } else { '90' }
   Write-Output (Paint $line $sgr)
   # Подсказка обязана быть КОПИРУЕМОЙ. Тег в шапке борда - имя каталога рядом с шиной, а memory-board
-  # спрашивает СЛАГ манифеста; на первом же живом пуле они разошлись (`.launcher` против `supervisors`),
+  # спрашивает СЛАГ манифеста; на первом же живом пуле они разошлись (`.launcher` против `<organizer-pool>`),
   # и совет не сработал бы. Слаг берём из манифеста, если он лежит в cwd; не нашёлся - даём -All,
   # который верен всегда.
   $slug = $null
@@ -896,20 +919,33 @@ function Invoke-Board {
   $hr  = [string]([char]0x2500) * [Math]::Min($W - 1, 72)
   $tag = try { Split-Path (Split-Path $BusRoot -Parent) -Leaf } catch { '' }
 
+  # Roster of pool roles, if the launcher left one. Anything unparseable = no roster.
+  $roster = $null
+  try {
+    $rf = Join-Path (Join-Path $BusRoot '.control') 'roster'
+    if (Test-Path -LiteralPath $rf) {
+      $roster = @(($L1RosterRead = [System.IO.File]::ReadAllText($rf)) -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and ($_ -notmatch '^#') })
+      if ($roster.Count -eq 0) { $roster = $null }
+    }
+  } catch { $roster = $null }
+
   $rows = @(Get-ChildItem -Path $BusRoot -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -notmatch '^(\.|archive$)' } | Sort-Object Name | ForEach-Object {
+    Where-Object { $_.Name -notmatch '^(\.|_|archive$)' } | Sort-Object Name | ForEach-Object {
       [pscustomobject]@{
         name = $_.Name
         new  = @(Get-ChildItem (Join-Path $_.FullName 'new') -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { -not (Is-Migration $_.Name) -and -not (Is-Note $_.Name) })
         cur  = @(Get-ChildItem (Join-Path $_.FullName 'cur') -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { -not (Is-Migration $_.Name) -and -not (Is-Note $_.Name) })
         w    = (Get-WatchState $_.Name)
         a    = (Get-ActivityState $_.Name)
+        role = ($null -eq $roster) -or ($roster -contains $_.Name)
       }
     })
   $arch  = @(Get-ChildItem (Join-Path $BusRoot 'archive') -Filter '*.md' -File -ErrorAction SilentlyContinue).Count
   $tPend  = [int](($rows | ForEach-Object { $_.new.Count } | Measure-Object -Sum).Sum)
   $tProg  = [int](($rows | ForEach-Object { $_.cur.Count } | Measure-Object -Sum).Sum)
-  $tArmed  = [int](@($rows | Where-Object { $_.w.state -eq 'on' }).Count)
+  $roles   = @($rows | Where-Object { $_.role })
+  $guests  = @($rows | Where-Object { -not $_.role })
+  $tArmed  = [int](@($roles | Where-Object { $_.w.state -eq 'on' }).Count)
   $tActive = [int](@($rows | Where-Object { $_.a.act -eq 'busy' -or $_.a.act -eq 'busy?' -or $_.a.act -eq 'sub' }).Count)
   # "working" = fresh busy / running subagents / stale-busy? whose watcher is STILL alive (process up, just a long
   # quiet turn -> would otherwise falsely read as "stopped"). busy? with a dead/absent watcher = likely crashed ->
@@ -920,16 +956,21 @@ function Invoke-Board {
   Write-Output ((Paint ("POOL BOARD  " + $tag) '1;36') + (Paint ('   ' + (Get-Date).ToString('HH:mm:ss')) '90'))
   Write-Output (Paint $hr '36')
   Write-Output (
-    (Paint ("{0} agents" -f $rows.Count) '97') + (Paint '  |  ' '90') +
+    (Paint ("{0} agents" -f $roles.Count) '97') + (Paint '  |  ' '90') +
     (Paint ("{0} pending" -f $tPend) $(if ($tPend) { '93' } else { '90' })) + (Paint '   ' '90') +
     (Paint ("{0} in progress" -f $tProg) $(if ($tProg) { '92' } else { '90' })) + (Paint '   ' '90') +
     (Paint ("{0} done" -f $arch) '90') + (Paint '  |  ' '90') +
-    (Paint ("{0}/{1} watchers" -f $tArmed, $rows.Count) $(if ($rows.Count -and $tArmed -eq $rows.Count) { '92' } elseif ($tArmed -eq 0) { '90' } else { '93' })) + (Paint '  |  ' '90') +
+    (Paint ("{0}/{1} watchers" -f $tArmed, $roles.Count) $(if ($roles.Count -and $tArmed -eq $roles.Count) { '92' } elseif ($tArmed -eq 0) { '90' } else { '93' })) + (Paint '  |  ' '90') +
     (Paint ("{0} active" -f $tActive) $(if ($tActive) { '93' } else { '90' }))
   )
   Write-Output (Paint $hr '90')
 
-  foreach ($r in $rows) {
+  foreach ($r in ($roles + $guests)) {
+    # Guests are mailboxes in this bus that are not roles of the pool (a peer from another
+    # pool writing to us). They are shown, but never counted as membership.
+    if ($guests.Count -and $r -eq $guests[0]) {
+      Write-Output (Paint ('  ' + [string][char]0x2500 + ' guests of this bus (not pool roles)') '90')
+    }
     $nc = $r.new.Count; $cc = $r.cur.Count
     $mk    = if ($cc -or $nc) { $dot } else { $ring }
     $mkSgr = if ($cc) { '92' } elseif ($nc) { '93' } else { '90' }
@@ -962,7 +1003,7 @@ function Invoke-Board {
   # are already set above, so nothing here can break the idle notification, and the board runs in an
   # endless redraw loop - an escaping exception would kill the loop and leave a stale window that
   # still looks alive (the worst failure mode a monitor can have).
-  try { Write-MemoryFooter -Rows $rows -Bus $BusRoot -Tag $tag } catch { }
+  try { Write-MemoryFooter -Rows $roles -Bus $BusRoot -Tag $tag } catch { }
 }
 
 # Live board: redraw on an interval in its own terminal window (Ctrl+C to exit). Clear guarded for non-console hosts.

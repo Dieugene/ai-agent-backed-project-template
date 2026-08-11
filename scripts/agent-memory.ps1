@@ -79,7 +79,7 @@ function Initialize-AgentMemoryRepo {
 # Join-Path с пустым Path БРОСАЕТ - и падал бы сам дот-сорс, то есть роль вообще не стартовала бы.
 # Строка выполняется на верхнем уровне, вне try. Зашитая константа так упасть не могла.
 $script:AgentMemoryGlobalFlag = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'agent-memory.enabled' }
-                               else { '<workspace-root>\.launcher\pool-bus\agent-memory.enabled' }
+                               else { 'C:\workspace-root\.launcher\pool-bus\agent-memory.enabled' }
 
 function Test-AgentMemoryEnabled {
     param([string]$Cwd = (Get-Location).Path)
@@ -109,7 +109,7 @@ function Register-AgentMemoryBusCwd {
     #
     # WHY: the task board (pool.ps1) knows ONLY the bus path, while the memory store is derived from
     # the cwd the wrapper sets with `cd /d`. For split pools these are DIFFERENT directories - the
-    # <sub-1> / auditors / agentic buses live in <monorepo>\01_projects\<project>\.bus while
+    # div-doc / auditors / agentic buses live in <monorepo>\01_projects\<project>\.bus while
     # their cwd is <workspace-root>\<monorepo>; search / team buses live under <umbrella>\<project>
     # while their cwd is <workspace-root>\<umbrella>. Deriving cwd from the bus path would miss the
     # store for 5 pools out of 17 (21 roles) - and miss it SILENTLY, which is the exact failure class
@@ -181,9 +181,10 @@ function Get-AgentMemoryStats {
             # Engine ceiling, measured live: 200 lines OR 25000 CHARACTERS - not bytes. The engine
             # prints its own warning as "MEMORY.md is 29.4KB (limit: 24.4KB)", where 29.4KB == chars/1024
             # (that same probe file was 48.3KB on disk), so Cyrillic costs nothing extra here.
-            # Counting BYTES overstated every Cyrillic store by ~1.55x: one index read 90% at a real 58%.
+            # Counting BYTES overstated every Russian store by ~1.55x: launcher read 90% at a real 58%,
+            # which is why this comment carries the evidence and not just the constant.
             # Report the binding ceiling, otherwise "90 lines, 86%" reads as a contradiction.
-            # Trailing newline must NOT add a phantom line: the engine counted a 320-line probe as 320.
+            # Trailing newline must NOT add a phantom line: the engine counted our 320-line probe as 320.
             $trimmed = $t.TrimEnd([char]13, [char]10)
             $s.IndexLines = if ($trimmed.Length) { @($trimmed -split "`r?`n").Count } else { 0 }
             $s.IndexChars = $t.Length

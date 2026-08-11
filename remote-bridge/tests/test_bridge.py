@@ -153,9 +153,17 @@ class InstanceCase(unittest.TestCase):
         B.STATE_DIR = root / "state"
         B.INBOX_DIR.mkdir()
         B.STATE_DIR.mkdir()
+        # AGENT_OWNER снимаем НА ВРЕМЯ ТЕСТА: он есть в окружении любой сессии агента, и с
+        # ним часть кейсов начинала бы фильтровать ленту по роли запускающего — тест зелёный
+        # в одной панели и красный в другой при одном и том же коде.
+        self._owner_env = os.environ.pop("AGENT_OWNER", None)
 
     def tearDown(self):
         B.INBOX_DIR, B.STATE_DIR, bridge.SENTINEL_LOCK = self._old
+        if self._owner_env is not None:
+            os.environ["AGENT_OWNER"] = self._owner_env
+        else:
+            os.environ.pop("AGENT_OWNER", None)
         self._td.cleanup()
 
 
@@ -297,15 +305,94 @@ class TestJournal(InstanceCase):
         ]
         f.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
         self.assertEqual(chat_sentinel.pending_count(), 2)          # дедуп по update_id
-        out, cur = read_inbox.collect_new({"file": "", "line": 0}, None)
+        out, cur, _ = read_inbox.collect_new({"file": "", "line": 0}, None)
         self.assertEqual([r["update_id"] for r in out], [1, 2])
         self.assertEqual(cur["line"], 3)
-        out2, _ = read_inbox.collect_new(cur, None)
+        out2, _, _ = read_inbox.collect_new(cur, None)
         self.assertEqual(out2, [])                                  # курсор пуст на повторе
         with f.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({"update_id": 3, "kind": "text", "text": "c"}) + "\n")
-        out3, _ = read_inbox.collect_new(cur, None)
+        out3, _, _ = read_inbox.collect_new(cur, None)
         self.assertEqual([r["update_id"] for r in out3], [3])       # приезжает только новая
+
+    # ---- адресная лента (per_target_inbox). Флаг ОПТ-ИН: без него ничего не меняется ----
+
+    def test_per_target_inbox_filters_and_is_opt_in(self):
+        import read_inbox
+        recs = [
+            {"update_id": 1, "kind": "text", "text": "старое, без метки"},
+            {"update_id": 2, "kind": "text", "text": "ведущему", "target": "launcher"},
+            {"update_id": 3, "kind": "voice", "target": "peer-supervisor"},
+            {"update_id": 3, "kind": "voice_transcript", "target": "peer-supervisor",
+             "text": "расшифровка"},
+            {"update_id": 4, "kind": "text", "text": "снова ведущему", "target": "launcher"},
+        ]
+        self._write(recs)
+        off = {"file": "", "line": 0}
+        # Флаг выключен -> видно всё, кем бы читатель ни был. Это защита чужих инстансов:
+        # у <pool-name> и <sub-b> ленту читают роли, которые целями НЕ
+        # являются, и вывод фильтра из mode ослепил бы их молча.
+        out, _, hid = read_inbox.collect_new(off, None, {}, "peer-supervisor")
+        self.assertEqual(len(out), 5)
+        self.assertEqual(hid, {})
+        cfg = {"per_target_inbox": True}
+        # Компаньон видит свои две записи (голос + его расшифровку) и запись БЕЗ метки.
+        out_ss, _, hid_ss = read_inbox.collect_new(off, None, cfg, "peer-supervisor")
+        self.assertEqual([r["update_id"] for r in out_ss], [1, 3, 3])
+        self.assertEqual([r["kind"] for r in out_ss][1:], ["voice", "voice_transcript"])
+        self.assertEqual(hid_ss, {"launcher": 2})
+        # Ведущий видит свои две и ту же запись без метки; чужой голос с расшифровкой скрыт.
+        out_l, cur_l, hid_l = read_inbox.collect_new(off, None, cfg, "launcher")
+        self.assertEqual([r["update_id"] for r in out_l], [1, 2, 4])
+        self.assertEqual(hid_l, {"peer-supervisor": 2})
+        # Курсор доходит до конца, несмотря на пропуски: иначе он застрял бы на чужой записи.
+        self.assertEqual(cur_l["line"], len(recs))
+        # Читатель без роли (plain-сессия) видит всё — фильтровать не по чему.
+        out_anon, _, _ = read_inbox.collect_new(off, None, cfg, None)
+        self.assertEqual(len(out_anon), 5)
+
+    def test_cursor_stops_at_unparsable_tail(self):
+        """Мост дописывает журнал в те же секунды, когда цель читает: недописанная
+        последняя строка не должна уносить курсор за собой."""
+        import read_inbox
+        f = B.INBOX_DIR / "2026-07-14.jsonl"
+        f.write_text(json.dumps({"update_id": 1, "kind": "text", "text": "a"}) + "\n"
+                     + '{"update_id": 2, "kind": "te', encoding="utf-8")
+        out, cur, _ = read_inbox.collect_new({"file": "", "line": 0}, None)
+        self.assertEqual([r["update_id"] for r in out], [1])
+        self.assertEqual(cur["line"], 1)                            # НЕ 2
+        # дописали хвост — запись приезжает, ничего не потеряно
+        f.write_text(json.dumps({"update_id": 1, "kind": "text", "text": "a"}) + "\n"
+                     + json.dumps({"update_id": 2, "kind": "text", "text": "b"}) + "\n",
+                     encoding="utf-8")
+        out2, _, _ = read_inbox.collect_new(cur, None)
+        self.assertEqual([r["update_id"] for r in out2], [2])
+
+    def test_cursor_path_and_visibility_helpers(self):
+        self.assertEqual(B.cursor_path({}, "launcher").name, "target-cursor.json")
+        self.assertEqual(B.cursor_path({"per_target_inbox": True}, None).name,
+                         "target-cursor.json")
+        self.assertEqual(B.cursor_path({"per_target_inbox": True}, "launcher").name,
+                         "target-cursor-launcher.json")
+        cfg = {"per_target_inbox": True}
+        self.assertTrue(B.rec_visible_to({}, cfg, "launcher"))       # без метки — всем
+        self.assertTrue(B.rec_visible_to({"target": "launcher"}, cfg, "launcher"))
+        self.assertFalse(B.rec_visible_to({"target": "other"}, cfg, "launcher"))
+        self.assertTrue(B.rec_visible_to({"target": "other"}, {}, "launcher"))  # флаг выкл
+
+    def test_reader_owner_sanitises(self):
+        prev = os.environ.get("AGENT_OWNER")
+        try:
+            for bad in ("", "  ", "../evil", "a/b", "x" * 65):
+                os.environ["AGENT_OWNER"] = bad
+                self.assertIsNone(B.reader_owner(), bad)            # в имя файла не уйдёт
+            os.environ["AGENT_OWNER"] = " launcher "
+            self.assertEqual(B.reader_owner(), "launcher")          # trim
+        finally:
+            if prev is None:
+                os.environ.pop("AGENT_OWNER", None)
+            else:
+                os.environ["AGENT_OWNER"] = prev
 
 
 class TestShouldWake(unittest.TestCase):
@@ -327,7 +414,14 @@ class TestShouldWake(unittest.TestCase):
 
     def test_lagging_but_window_passed(self):
         st = {"last_wake_ts": 900, "tail_at_wake": 5}
-        self.assertTrue(bridge.should_wake(7, 3, st, self.D, 1000))
+        self.assertTrue(bridge.should_wake(7, 3, st, self.D, 1000))     # tail 7 > tail_at_wake 5 -> НОВОЕ пришло, будим
+
+    def test_no_renag_same_backlog(self):
+        # RE-NAG (баг 001-b): цель разбужена на tail=5, курсор стоит (роль не читает сырьё),
+        # окно дебаунса прошло, но НОВОГО НИЧЕГО НЕ ПРИШЛО (tail == tail_at_wake).
+        # Один и тот же непрочитанный backlog ре-нагать нельзя — цель уже разбужена.
+        st = {"last_wake_ts": 900, "tail_at_wake": 5}
+        self.assertFalse(bridge.should_wake(5, 3, st, self.D, 1000))
 
 
 class TestSentinelAlive(InstanceCase):
@@ -360,6 +454,113 @@ class TestSentinelAlive(InstanceCase):
         self.assertEqual(rc, 0)
         for step in ("STEP 1", "STEP 2", "STEP 3", "1 new"):
             self.assertIn(step, text)
+        # Предписание description распространяется вместе с командой перевзвода:
+        # при убийстве харнессом оно — единственное, что доедет до агента.
+        self.assertIn("description:", text)
+        self.assertIn(chat_sentinel.RE_ARM_DESC, text)
+
+    def test_superseded_speaks_and_forbids_rearm(self):
+        """Вытесненный экземпляр ГОВОРИТ о себе (exit 3).
+
+        Молчание не спасало от побудки — завершение фоновой задачи будит сессию в
+        любом случае, — зато делало вытеснение неотличимым от снятия харнессом
+        (у убитой задачи вывод пуст). Агент перевзводил сторож, убивая живого:
+        пинг-понг. Инвариант: пусто == снял харнесс, всё остальное говорит вслух.
+        """
+        import chat_sentinel
+        chat_sentinel.CURSOR_PATH = B.STATE_DIR / "target-cursor.json"
+        chat_sentinel.LOCK_PATH = B.STATE_DIR / "chat-sentinel.lock"
+        (B.INBOX_DIR / "2026-07-14.jsonl").write_text(
+            json.dumps({"update_id": 1, "kind": "text", "text": "x"}) + "\n",
+            encoding="utf-8")
+        # Шов: main() первым делом пишет СВОЙ pid в lock, поэтому чужой pid снаружи
+        # не подставить — глушим только эту запись, файл остаётся с чужим pid.
+        chat_sentinel.LOCK_PATH.write_text(json.dumps({"pid": 999999999}),
+                                           encoding="utf-8")
+        old_write, old_owner = B.write_json, os.environ.pop("AGENT_OWNER", None)
+        B.write_json = lambda *a, **k: None
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = chat_sentinel.main()
+            text = out.getvalue()
+        finally:
+            B.write_json = old_write
+            if old_owner is not None:
+                os.environ["AGENT_OWNER"] = old_owner
+        self.assertEqual(rc, chat_sentinel.EXIT_SUPERSEDED)
+        self.assertIn("superseded", text)
+        self.assertIn("NOT re-arm", text)
+        self.assertNotIn("fired", text)   # сообщение есть, но чужой сторож его и возьмёт
+
+
+class TestEveryKindWakes(InstanceCase):
+    """Сторож будит на ВСЕ типы сообщений владельца, кроме управляющих команд.
+
+    Вопрос владельца 2026-07-28: «`/start` не дал срабатывания». Так и задумано —
+    `/start` и `/switch` глотаются (Telegram шлёт `/start` при открытии бота).
+    Но «на остальное будит» держалось только на чтении кода: побудка == запись в
+    журнал, и ни один тест не проверял, что запись происходит для КАЖДОГО типа.
+    Здесь путь настоящий и целиком: process_updates -> журнал -> pending_count().
+    """
+
+    # (ярлык, тело сообщения) — всё это ОБЯЗАНО доехать до сторожа
+    WAKING = [
+        ("текст", {"text": "обычный текст"}),
+        ("слэш-команда не из словаря", {"text": "/status"}),
+        ("/switch с аргументом = данные, не команда", {"text": "/switch now"}),
+        ("голосовое", {"voice": {"file_id": "v1", "file_unique_id": "vu1",
+                                 "file_size": 900, "duration": 3}}),
+        ("фото с подписью", {"photo": [{"file_id": "p1", "file_unique_id": "pu1",
+                                        "file_size": 100}], "caption": "смотри"}),
+        ("фото БЕЗ подписи", {"photo": [{"file_id": "p2", "file_unique_id": "pu2",
+                                         "file_size": 100}]}),
+        ("документ", {"document": {"file_id": "d1", "file_unique_id": "du1",
+                                   "file_name": "a.pdf", "mime_type": "application/pdf",
+                                   "file_size": 10}}),
+        ("стикер", {"sticker": {"file_id": "s1", "file_unique_id": "su1"}}),
+        ("длинный текст (обрезается, но доезжает)", {"text": "я" * (B.MAX_TEXT_CHARS + 50)}),
+    ]
+    # управляющие команды: точное совпадение, закрытый словарь -> НЕ будят
+    SWALLOWED = [("/start", {"text": "/start"}), ("/switch", {"text": "/switch"})]
+
+    def test_every_owner_message_kind_reaches_the_sentinel(self):
+        import chat_sentinel
+        chat_sentinel.CURSOR_PATH = B.STATE_DIR / "target-cursor.json"
+        chat_sentinel.LOCK_PATH = B.STATE_DIR / "chat-sentinel.lock"
+        cfg, state = dict(CFG), {"owner_id": 42, "current_target": "launcher"}
+        _, send = recorder()
+
+        def offline(_token, method, *a, **k):
+            raise B.BridgeApiError(method, None, "offline (self-test)")
+
+        old_api, B.api_call = B.api_call, offline   # media-скачивание без сети
+        uid = 100
+        try:
+            for label, body in self.WAKING:
+                uid += 1
+                had = bridge.process_updates(
+                    "tok", cfg, [upd(update_id=uid, from_id=42, **body)],
+                    BOT, None, send, state, "solo")
+                self.assertTrue(had, f"{label}: не записано в журнал -> сторож НЕ разбудит")
+            # правленое сообщение приходит другим ключом апдейта
+            uid += 1
+            edited = upd(update_id=uid, from_id=42, text="исправил")
+            edited["edited_message"] = edited.pop("message")
+            self.assertTrue(bridge.process_updates("tok", cfg, [edited], BOT, None,
+                                                   send, state, "solo"),
+                            "правка сообщения: не записана -> сторож НЕ разбудит")
+            for label, body in self.SWALLOWED:
+                uid += 1
+                had = bridge.process_updates(
+                    "tok", cfg, [upd(update_id=uid, from_id=42, **body)],
+                    BOT, None, send, state, "solo")
+                self.assertFalse(had, f"{label}: управляющая команда будить НЕ должна")
+        finally:
+            B.api_call = old_api
+
+        # сторож считает ровно доехавшее: все WAKING + правка, команды не в счёт
+        self.assertEqual(chat_sentinel.pending_count(), len(self.WAKING) + 1)
 
 
 # ------------------------------------------------------------------ токен / секреты
@@ -463,6 +664,154 @@ class TestGate(unittest.TestCase):
     def test_no_owner_env_exit_0(self):
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(self._run(Path(td), ""), 0)
+
+
+class ShutdownQuarantine(unittest.TestCase):
+    """Карантин гашения у сторожа чата: под intent-меткой роли он молчит.
+
+    Метку ставит контроллер гашения ПОСЛЕ отправки задачи завершения и снимает перед убийством;
+    прерванное гашение чистит запуск пула. Сторож живёт внутри роли, поэтому знает и своё имя,
+    и путь к шине — в отличие от самого моста, который ходит мимо неё.
+    """
+
+    def setUp(self):
+        import chat_sentinel  # noqa: PLC0415 - импорт внутри теста: модуль тянет bridgelib
+        self.cs = chat_sentinel
+        self._saved = {k: os.environ.get(k) for k in ("AGENT_OWNER", "POOL_BUS_ROOT")}
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    @staticmethod
+    def _mark(bus: Path, owner: str) -> Path:
+        ctl = bus / ".control"
+        ctl.mkdir(parents=True, exist_ok=True)
+        return ctl / f"shutdown-intent-{owner}"
+
+    def test_no_mark_speaks(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["AGENT_OWNER"] = "lead"
+            os.environ["POOL_BUS_ROOT"] = td
+            self.assertFalse(self.cs.shutdown_quiet())
+
+    def test_own_mark_silences(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["AGENT_OWNER"] = "lead"
+            os.environ["POOL_BUS_ROOT"] = td
+            self._mark(Path(td), "lead").write_text("", encoding="utf-8")
+            self.assertTrue(self.cs.shutdown_quiet())
+
+    def test_neighbour_mark_does_not_silence(self):
+        """Гасят соседа — я продолжаю слышать. Иначе одно гашение глушило бы весь пул."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["AGENT_OWNER"] = "lead"
+            os.environ["POOL_BUS_ROOT"] = td
+            self._mark(Path(td), "operator").write_text("", encoding="utf-8")
+            self.assertFalse(self.cs.shutdown_quiet())
+
+    def test_solo_mode_never_quarantined(self):
+        """Одиночный мост вне пула: переменных нет, карантину неоткуда взяться."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["AGENT_OWNER"] = "lead"
+            os.environ.pop("POOL_BUS_ROOT", None)
+            self._mark(Path(td), "lead").write_text("", encoding="utf-8")
+            self.assertFalse(self.cs.shutdown_quiet())
+
+
+class ShutdownQuarantineLoop(InstanceCase):
+    """Шов, которого не хватало: тесты выше проверяют ФУНКЦИЮ, а этот — что цикл её ЗОВЁТ.
+
+    Мутационная проба (<peer-supervisor>, на копии в /tmp): заменить в `main()` вызов
+    `if shutdown_quiet():` на `if False:` — карантин исчезает, а весь набор остаётся зелёным.
+    То есть требование владельца «с начала гашения ничего не вбрасывать» мог снять любой
+    рефакторинг, и прогон бы это одобрил.
+    """
+
+    def test_main_stays_silent_under_mark(self):
+        import chat_sentinel  # noqa: PLC0415 - как в тестах выше: модуль тянет bridgelib
+        chat_sentinel.CURSOR_PATH = B.STATE_DIR / "target-cursor.json"
+        chat_sentinel.LOCK_PATH = B.STATE_DIR / "chat-sentinel.lock"
+        # Сообщение в ленте ЕСТЬ: без карантина sentinel напечатал бы «fired» и вернул 0 —
+        # на этом мутация и краснеет.
+        (B.INBOX_DIR / "2026-07-14.jsonl").write_text(
+            json.dumps({"update_id": 1, "kind": "text", "text": "x"}) + "\n",
+            encoding="utf-8")
+
+        class _Enough(Exception):
+            """Выход из вечного цикла: под карантином main() не возвращает управление."""
+
+        laps = []
+
+        def fake_sleep(_sec):
+            laps.append(1)
+            if len(laps) >= 3:
+                raise _Enough
+
+        bus = Path(self._td.name) / "bus"
+        (bus / ".control").mkdir(parents=True)
+        (bus / ".control" / "shutdown-intent-lead").write_text("", encoding="utf-8")
+        old_sleep = chat_sentinel.time.sleep
+        old_bus = os.environ.get("POOL_BUS_ROOT")
+        os.environ["AGENT_OWNER"] = "lead"       # InstanceCase.tearDown вернёт исходное
+        os.environ["POOL_BUS_ROOT"] = str(bus)
+        out = io.StringIO()
+        try:
+            chat_sentinel.time.sleep = fake_sleep
+            with contextlib.redirect_stdout(out):
+                with self.assertRaises(_Enough):
+                    chat_sentinel.main()
+        finally:
+            chat_sentinel.time.sleep = old_sleep
+            if old_bus is None:
+                os.environ.pop("POOL_BUS_ROOT", None)
+            else:
+                os.environ["POOL_BUS_ROOT"] = old_bus
+        # Печать здесь и есть побудка: под меткой не должно уйти ни строки.
+        self.assertEqual(out.getvalue(), "")
+        self.assertGreaterEqual(len(laps), 3)
+
+
+class PidAlivePortToLinux(unittest.TestCase):
+    """Ветка не-Windows у `pid_alive` (порт <peer-supervisor>'а).
+
+    Бьём по САМОЙ `pid_alive` с подменённым чтением, а не по разбору отдельно: иначе
+    повторили бы дыру карантина — проверить парсер и не заметить, что решение берёт не то поле.
+    """
+
+    ZOMBIE = "4242 (my (weird) proc) Z 1 4242 4242 0 -1 4194560 0 0\n"
+    LIVE = "4242 (my (weird) proc) S 1 4242 4242 0 -1 4194560 0 0\n"
+
+    def _pid_alive_as_posix(self, raw: str) -> bool:
+        from unittest import mock  # noqa: PLC0415
+        with mock.patch.object(B.os, "name", "posix"), \
+             mock.patch.object(B, "_read_proc_stat", lambda _pid: raw):
+            return B.pid_alive(4242)
+
+    def test_zombie_is_dead(self):
+        """Ради этого случая порт и написан: у зомби запись в /proc есть, а `os.kill(pid, 0)`
+        успешен — значит мёртвый процесс держал бы замок моста."""
+        self.assertFalse(self._pid_alive_as_posix(self.ZOMBIE))
+
+    def test_running_is_alive(self):
+        self.assertTrue(self._pid_alive_as_posix(self.LIVE))
+
+    def test_name_with_spaces_and_parens_does_not_shift_fields(self):
+        """Имя процесса в скобках бывает с пробелами и скобками: режем по ПОСЛЕДНЕЙ «)»."""
+        self.assertEqual(B._parse_proc_stat(self.LIVE)[:3], ["4242", "S", "1"])
+
+    def test_unreadable_proc_is_dead(self):
+        from unittest import mock  # noqa: PLC0415
+
+        def boom(_pid):
+            raise OSError(2, "No such file or directory")
+
+        with mock.patch.object(B.os, "name", "posix"), \
+             mock.patch.object(B, "_read_proc_stat", boom):
+            self.assertFalse(B.pid_alive(4242))
 
 
 if __name__ == "__main__":
