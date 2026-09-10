@@ -45,8 +45,11 @@ out=$(SHOP_DIR="$SB/shop" bash "$SB/web-entry.sh" role demo-pool lead </dev/null
 [ "$out" = "ENTER:2:demo-pool lead" ]; ok "role → enter.sh <пул> <роль>" $? "$out"
 out=$(SHOP_DIR="$SB/shop" bash "$SB/web-entry.sh" pool demo-pool </dev/null 2>&1)
 [ "$out" = "ENTER:1:demo-pool" ]; ok "pool → enter.sh <пул>" $? "$out"
+# 🛑 Пульт обязан подниматься с «--warp»: без ключа он входит в роль ПРЯМО В СВОЕЙ панели
+# (человек видит сессию под заголовком «пульт цеха») и уводит текущее окно рабочей сессии пула.
 out=$(SHOP_DIR="$SB/shop" bash "$SB/web-entry.sh" desk </dev/null 2>&1)
-[ "$out" = "DESK:0:" ]; ok "desk → shop-desk.sh" $? "$out"
+[ "$out" = "DESK:1:--warp" ]; ok "desk → shop-desk.sh --warp" $? "$out"
+grep -q "SHOP_ACTION_FILE" "$CONSOLE/web-entry.sh"; ok "у веб-пульта СВОЙ файл запроса" $? "общий делят локальный пульт и его обёртка — запрос заберёт первый прочитавший"
 out=$(SHOP_DIR="$SB/nope" bash "$SB/web-entry.sh" desk </dev/null 2>&1)
 grep -qF "Пульта цеха нет" <<<"$out"; ok "desk без пульта → сказано, чего нет" $? "$out"
 rm -rf "$SB"
@@ -125,6 +128,7 @@ if curl -s -m 2 -o /dev/null "http://127.0.0.1:$UPPORT/health" 2>/dev/null; then
 fi
 SHOP_WORKSPACE="$UPWS" SHOP_HOME="$UPHOME" POOL_CLI="$UPHOME/fake-pool" \
   SHOP_DIR="${SHOP_DIR:-$HOME/workspace/.launcher/shop}" \
+  SHOP_ACTION_FILE="$UPHOME/desk-action-web" \
   python3 "$CONSOLE/web-serve.py" --bind 127.0.0.1 --port $UPPORT >/dev/null 2>&1 &
 UPPID=$!
 for i in 1 2 3 4 5 6 7 8 9 10; do curl -s -m 2 -o /dev/null "http://127.0.0.1:$UPPORT/health" && break; sleep 0.4; done
@@ -154,7 +158,17 @@ ok "путь в имени обезврежен, файл лёг в подъящ
 code=$(up "pool=probe-web&role=architect&name=.env" "TOKEN=1")
 [ "$code" = "200" ] && grep -q "придержал файл" /tmp/probe-up.out; ok "секрет придержан и назван" $? "код $code: $(head -3 /tmp/probe-up.out | tr '\n' ' ')"
 [ ! -f "$UPWS/pooldir/exchange/inbox/architect/.env" ]; ok "и на диск не лёг" $? ""
-echo "6. обратная дорога: забрать из ящика пула то, что положили роли"
+echo "6. запрос от пульта: страница забирает его один раз и открывает панели сама"
+ACT="$UPHOME/desk-action-web"
+printf 'enter\tdemo-pool\tlead operator\n' > "$ACT"
+A1=$(curl -s -m 5 "http://127.0.0.1:$UPPORT/desk-action")
+grep -q '"what": "enter"' <<<"$A1" && grep -q '"pool": "demo-pool"' <<<"$A1" && grep -q '"lead", "operator"' <<<"$A1"
+ok "запрос прочитан и разобран" $? "$A1"
+[ ! -f "$ACT" ]; ok "файл запроса убран после чтения" $? "иначе панели откроются повторно"
+A2=$(curl -s -m 5 "http://127.0.0.1:$UPPORT/desk-action")
+[ "$(tr -d ' ' <<<"$A2")" = "{}" ]; ok "второй раз запроса нет" $? "$A2"
+
+echo "7. обратная дорога: забрать из ящика пула то, что положили роли"
 OUT="$UPWS/pooldir/exchange/outbox"
 mkdir -p "$OUT/architect"
 printf 'итог работы' > "$OUT/architect/отчёт.md"
@@ -201,7 +215,7 @@ kill "$UPPID" 2>/dev/null; wait "$UPPID" 2>/dev/null
 rm -rf "$UPWS" "$UPHOME" /tmp/probe-up.out /tmp/probe-dl.out /tmp/probe-hdr.out
 
 if [ "${1:-}" = "--mutate" ]; then
-  echo "7. мутация: убираем проверку формы — проба обязана покраснеть"
+  echo "8. мутация: убираем проверку формы — проба обязана покраснеть"
   M=$(mktemp); sed 's/^ok_name() {.*/ok_name() { return 0; }/' "$CONSOLE/web-entry.sh" > "$M"
   out=$(bash "$M" role 'a;b' lead </dev/null 2>&1)
   if grep -qF "не по форме" <<<"$out"; then ok "мутант пойман" 1 "мутант всё ещё отказывает — проба не смотрит на форму"

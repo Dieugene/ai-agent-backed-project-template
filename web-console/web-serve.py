@@ -381,6 +381,24 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(data)
+        elif path == "/desk-action":
+            # Пульт цеха в браузере поднят с «--warp»: войдя в роль, он не занимает свою панель, а
+            # кладёт запрос сюда и выходит. Забираем запрос ОДИН раз (файл удаляем): второй
+            # читатель открыл бы те же панели повторно.
+            f = os.environ.get("SHOP_ACTION_FILE") or os.path.join(os.path.expanduser("~"), ".shop", "desk-action-web")
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    line = fh.readline().rstrip("\n")
+                os.unlink(f)
+            except OSError:
+                self._send(200, "{}", "application/json; charset=utf-8")
+                return
+            parts = line.split("\t")
+            what = parts[0] if parts else ""
+            pool = parts[1] if len(parts) > 1 else ""
+            roles = [r for r in (parts[2].split() if len(parts) > 2 else []) if r and r != "-"]
+            self._send(200, json.dumps({"what": what, "pool": pool, "roles": roles}, ensure_ascii=False),
+                       "application/json; charset=utf-8")
         elif path == "/health":
             self._send(200, "ok\n", "text/plain; charset=utf-8")
         else:

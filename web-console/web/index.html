@@ -496,6 +496,39 @@
       $status.textContent = 'список не читается: ' + (e && e.message || e);
     }
   }
+  // Пульт цеха, войдя в роль, кладёт запрос на сервере и выходит (ключ «--warp» — «эта сторона
+  // умеет открывать окна»). Забираем запрос и открываем панели сами: иначе пульт занимал бы
+  // собственную панель сессией роли под заголовком «пульт цеха» — и уводил текущее окно пула.
+  async function pollDesk() {
+    if (!panes.some(x => x.kind === 'desk')) return;   // спрашиваем, только пока пульт открыт
+    let a;
+    try {
+      const r = await fetch('desk-action', {cache: 'no-store'});
+      a = await r.json();
+    } catch (e) { return; }
+    if (!a || !a.what) return;
+    if (a.what === 'enter' && a.pool) {
+      const list = (a.roles || []).filter(Boolean);
+      if (list.length) {
+        list.forEach(role => open({kind: 'role', pool: a.pool, role}));
+        say('пульт открыл ' + (list.length > 1 ? ('роли: ' + list.join(', ')) : ('роль ' + list[0])));
+      } else {
+        open({kind: 'pool', pool: a.pool, role: ''});
+        say('пульт открыл пульт смены пула ' + a.pool);
+      }
+    } else if (a.what === 'watch' && a.pool) {
+      // Ход длительной операции цех держит окнами в отдельной служебной сессии; ищем в списке то,
+      // чьё имя оканчивается слагом пула, и открываем его. Не нашли — говорим словами.
+      const ops = roster && (roster.pools || []).find(p => p.name === 'shop-ops');
+      const w = ops && ops.roles.find(r => r.name.endsWith('-' + a.pool));
+      if (w) { open({kind: 'role', pool: 'shop-ops', role: w.name}); say('открыл ход операции: ' + w.name); }
+      else say('пульт просил показать ход операции по ' + a.pool + ', но окна операции не видно', true);
+    } else {
+      say('пульт прислал запрос «' + a.what + '», из браузера он пока не поддержан', true);
+    }
+  }
+  setInterval(pollDesk, 1500);
+
   document.getElementById('desk').onclick = () => open({kind: 'desk', pool: '', role: ''});
   document.getElementById('reload').onclick = load;
   setInterval(load, 15000);
