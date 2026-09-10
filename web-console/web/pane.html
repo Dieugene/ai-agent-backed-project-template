@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Цех</title>
+<style>
+  :root{--bg:#0b0e14;--fg:#d7dae0;--warn:#e0b060;--bar:#2a3341}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  body{display:flex;flex-direction:column}
+  *{scrollbar-width:thin;scrollbar-color:var(--bar) transparent}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--bar);border-radius:6px}
+  iframe{flex:1;border:0;width:100%;background:var(--bg)}
+  #say{display:none;padding:4px 8px;background:#221c10;color:var(--warn);font-size:12px;flex:none}
+  #say.on{display:block}
+  .bad{padding:16px;color:var(--warn)}
+</style>
+</head>
+<body>
+<div id="say"></div>
+<script src="panes.js"></script>
+<script>
+(() => {
+  'use strict';
+  // Страница собрана из двух файлов; неполный доезд обязан говорить словами, иначе пустое окно
+  // читается как поломка терминала (тот же класс, что «нет библиотеки видов» в enter.sh).
+  if (!window.ShopWeb || typeof window.ShopWeb.dressFrame !== 'function') {
+    document.body.innerHTML = '<div class="bad">Не доехал panes.js — окно панели не собрать. Долейте файл на сервер.</div>';
+    return;
+  }
+  const {termUrl, dressFrame} = window.ShopWeb;
+  // 🛑 Браузер КОПИРУЕТ sessionStorage окна-открывателя в окно, созданное window.open. Значит
+  // сюда приезжает набор панелей той страницы; окну панели он не нужен и, если из этого окна
+  // перейти на корень сайта, дал бы чужую раскладку. Чистим на входе.
+  try { sessionStorage.removeItem('shopweb.panes'); } catch (e) {}
+  const q = new URLSearchParams(location.search);
+  const spec = {kind: q.get('kind') || '', pool: q.get('pool') || '', role: q.get('role') || ''};
+  const NAME_OK = /^[a-z0-9._-]{1,64}$/;
+
+  const $say = document.getElementById('say');
+  let timer = 0;
+  function say(text) {
+    clearTimeout(timer);
+    $say.textContent = text;
+    $say.className = 'on';
+    timer = setTimeout(() => { $say.className = ''; }, 8000);
+  }
+
+  // Проверяем то же, что web-entry.sh на сервере: окно открывается по ссылке, а ссылку можно
+  // и подправить руками. Отказ говорим словами — пустое окно читалось бы как поломка.
+  const bad = spec.kind === 'role' ? (!NAME_OK.test(spec.pool) || !NAME_OK.test(spec.role))
+            : spec.kind === 'pool' ? !NAME_OK.test(spec.pool)
+            : spec.kind === 'desk' ? false : true;
+  if (bad) {
+    document.body.innerHTML = '<div class="bad">Не понимаю, что открывать: в ссылке нет пула и роли '
+      + 'по форме (a-z 0-9 . _ -). Откройте панель из списка на странице цеха.</div>';
+    return;
+  }
+
+  // Заголовок окна — короткий: «пул / роль». Так владелец различает окна на панели задач.
+  // ⚠️ Заголовок ставит ЭТА страница, а не терминал: ttyd внутри рамки пишет своё длинное имя
+  // в заголовок СВОЕГО документа, наружу оно не попадает.
+  document.title = spec.kind === 'role' ? `${spec.pool} / ${spec.role}`
+                 : spec.kind === 'pool' ? `${spec.pool} / пульт смены` : 'пульт цеха';
+
+  const fr = document.createElement('iframe');
+  fr.src = termUrl(spec);
+  fr.title = document.title;
+  fr.addEventListener('load', () => dressFrame(fr, say));
+  document.body.appendChild(fr);
+  fr.focus();
+})();
+</script>
+</body>
+</html>

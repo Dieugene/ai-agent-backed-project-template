@@ -1,0 +1,12 @@
+[Unit]
+Description=Страница-пульт цеха на 127.0.0.1:7680, за прокси DevOps (всё, кроме /term)
+After=agents-tmux.service
+
+[Service]
+Environment=LANG=en_US.UTF-8
+ExecStart=/usr/bin/python3 %h/workspace/.launcher/console/web-serve.py --bind 127.0.0.1 --port 7680
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

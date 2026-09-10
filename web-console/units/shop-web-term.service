@@ -1,0 +1,19 @@
+[Unit]
+Description=Веб-терминал цеха: ttyd на 127.0.0.1:7681, за прокси DevOps по пути /term
+After=agents-tmux.service
+Wants=agents-tmux.service
+
+[Service]
+Environment=LANG=en_US.UTF-8
+# -a: аргументы входа из адресной строки (?arg=role&arg=<пул>&arg=<роль>) — их проверяет web-entry.sh
+# -W: клиент может печатать (по умолчанию ttyd только показывает)
+# -b /term: так путь отдаёт прокси; ws идёт на /term/ws
+# ⚠️ Без -O (проверка Origin): за https-прокси ttyd сравнивает «host:443» из Origin с голым Host
+# и отказывает всем. Защиту от чужой вкладки (CSRF на /term/ws) держит прокси DevOps: Origin
+# обязан быть адресом сайта либо отсутствовать (не-браузерный клиент).
+ExecStart=%h/.local/bin/ttyd -i 127.0.0.1 -p 7681 -W -a -b /term -P 10 -t fontSize=13 -t disableLeaveAlert=true -t disableResizeOverlay=true -t 'theme={"background":"#0b0e14","foreground":"#d7dae0","cursor":"#d7dae0"}' bash %h/workspace/.launcher/console/web-entry.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

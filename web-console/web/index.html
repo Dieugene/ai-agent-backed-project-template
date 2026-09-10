@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Цех</title>
+<style>
+  :root{--bg:#0b0e14;--side:#0e1218;--line:#1e2531;--fg:#d7dae0;--dim:#7c8594;--acc:#8fbce6;--dead:#4f565f;--warn:#e0b060;--hdr:#141a23;--bar:#2a3341}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  body{display:grid;grid-template-columns:230px minmax(0,1fr);grid-template-rows:100%}
+  /* Полосы прокрутки: тонкие, в цвет страницы. Firefox понимает scrollbar-*, Chrome — ::-webkit-*;
+     оба свойства заданы намеренно, это не дубль. */
+  *{scrollbar-width:thin;scrollbar-color:var(--bar) transparent}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--bar);border-radius:6px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--acc)}
+  ::-webkit-scrollbar-corner{background:transparent}
+  aside{background:var(--side);border-right:1px solid var(--line);overflow:auto;padding:10px 8px 14px;display:flex;flex-direction:column;gap:10px;min-height:0}
+  h1{font-size:14px;font-weight:600;margin:0 2px 2px;letter-spacing:.02em;display:flex;align-items:center;justify-content:space-between}
+  h1 small{color:var(--dim);font-weight:400;font-size:11px}
+  button{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:6px;padding:4px 8px;cursor:pointer;text-align:left}
+  button:hover:not(:disabled){border-color:var(--acc);color:var(--acc)}
+  button:disabled{opacity:.45;cursor:default}
+  button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+  .top{display:flex;gap:6px}
+  .top button{flex:1;text-align:center}
+  .pool{display:flex;flex-direction:column;gap:3px}
+  .pool-name{display:flex;align-items:center;gap:4px;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:2px 2px 0}
+  .pool-name span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pool-name button{font-size:11px;padding:1px 6px;text-transform:none;letter-spacing:0}
+  /* Значок «забрать» — тот же, что в шапке панели: одно действие обозначается одинаково везде. */
+  .pool-name button[data-a=files]{font-size:13px;line-height:14px;padding:0 6px}
+  .role{display:flex;align-items:center;gap:6px}
+  .role::before{content:"";width:6px;height:6px;border-radius:50%;background:#6cc47a;flex:none}
+  .role.dead{color:var(--dead)}
+  .role.dead::before{background:var(--dead)}
+  .role.open{border-color:var(--acc);background:#132030}
+  .status{margin-top:auto;color:var(--dim);font-size:11px;padding:0 2px}
+  .status.err{color:var(--warn)}
+  main{display:grid;gap:4px;padding:4px;min-width:0;min-height:0;grid-auto-rows:minmax(0,1fr)}
+  main.n1{grid-template-columns:1fr}
+  main.n2,main.n3,main.n4{grid-template-columns:1fr 1fr}
+  main.n5,main.n6,main.n7,main.n8,main.n9{grid-template-columns:1fr 1fr 1fr}
+  main.many{grid-template-columns:repeat(auto-fit,minmax(360px,1fr))}
+  .empty{grid-column:1/-1;align-self:center;justify-self:center;color:var(--dim);text-align:center}
+  .pane{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#000}
+  /* Зона сброса файлов лежит ПОВЕРХ рамки терминала и включается только на время перетаскивания:
+     иначе она перехватывала бы мышь у самого терминала. */
+  .drop{position:absolute;inset:0;z-index:5;display:none;align-items:center;justify-content:center;
+        background:rgba(11,14,20,.86);border:2px dashed var(--acc);border-radius:6px;color:var(--acc);
+        font-size:13px;text-align:center;padding:12px}
+  body.dragging .drop{display:flex}
+  .drop.over{background:rgba(19,32,48,.95);border-style:solid}
+  .pane.focus{border-color:var(--acc)}
+  .pane header{display:flex;align-items:center;gap:6px;background:var(--hdr);padding:2px 4px 2px 8px;font-size:12px;color:var(--dim);flex:none}
+  .pane header span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pane header b{color:var(--fg);font-weight:600}
+  .pane header button{padding:0 6px;border:0;font-size:14px;line-height:18px;color:var(--dim)}
+  .pane header button:hover{color:var(--fg)}
+  .pane iframe{flex:1;border:0;width:100%;height:100%;background:#0b0e14}
+  .pane.max{position:fixed;inset:0;z-index:10;border-radius:0}
+  .files{flex:1;overflow:auto;background:var(--bg);padding:6px 8px;font-size:12px}
+  .files .row{display:flex;align-items:baseline;gap:8px;padding:4px 2px;border-bottom:1px solid var(--line)}
+  .files .row:last-child{border-bottom:0}
+  .files .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+  .files .who{color:var(--acc);flex:none}
+  .files .meta{color:var(--dim);flex:none;font-variant-numeric:tabular-nums}
+  .files a,.files .rm{flex:none;color:var(--dim);text-decoration:none;border:1px solid var(--line);
+                      border-radius:5px;padding:1px 7px;cursor:pointer;font-size:11px}
+  .files a:hover,.files .rm:hover{color:var(--acc);border-color:var(--acc)}
+  .files .none{color:var(--dim);padding:8px 2px}
+  .files .head{display:flex;gap:8px;align-items:center;color:var(--dim);padding-bottom:6px}
+  @media (max-width:700px){
+    body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+    aside{border-right:0;border-bottom:1px solid var(--line);flex-direction:row;flex-wrap:wrap;max-height:40vh}
+    main{grid-template-columns:1fr !important}
+  }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Цех <small id="clock"></small></h1>
+  <div class="top">
+    <button id="desk" title="пульт цеха: пулы, чистка, гашение">пульт цеха</button>
+    <button id="reload" title="перечитать список">обновить</button>
+  </div>
+  <div id="pools"></div>
+  <div class="status" id="status">…</div>
+</aside>
+<main id="panes" class="n0"><div class="empty">Роль из списка слева откроется здесь панелью.<br>Панелей может быть несколько.</div></main>
+<script src="panes.js"></script>
+<script>
+(() => {
+  'use strict';
+  // Страница собрана из двух файлов; если panes.js не доехал или отдан с ошибкой, без этой
+  // проверки скрипт умирает на первой строке — колонка пустая, статус «…», ни кнопок, ни слова.
+  // Тот же класс, против которого стоит проверка библиотеки видов в enter.sh.
+  if (!window.ShopWeb || typeof window.ShopWeb.dressFrame !== 'function') {
+    document.getElementById('status').textContent = 'не доехал panes.js — долейте файл на сервер';
+    document.getElementById('status').className = 'status err';
+    return;
+  }
+  const {TERM, ASKED, esc, dressFrame, termUrl} = window.ShopWeb;
+  const KEY = 'shopweb.panes';
+  const $pools = document.getElementById('pools');
+  const $panes = document.getElementById('panes');
+  const $status = document.getElementById('status');
+  const $clock = document.getElementById('clock');
+  let roster = null, statusTimer = 0;
+  const panes = [];   // {kind, pool, role, el} — панели в сетке этой страницы
+  const outs = [];    // {kind, pool, role, win} — то же, вынесенное в отдельные окна браузера
+
+  const label = (p) => p.kind === 'role' ? `${esc(p.pool)} / <b>${esc(p.role)}</b>`
+                     : p.kind === 'pool' ? `${esc(p.pool)} / <b>пульт смены</b>`
+                     : p.kind === 'files' ? `${esc(p.pool)} / <b>файлы для меня${p.role ? ' — ' + esc(p.role) : ''}</b>`
+                     : '<b>пульт цеха</b>';
+  const same = (a, b) => a.kind === b.kind && a.pool === b.pool && a.role === b.role;
+  const plain = ({kind, pool, role}) => ({kind, pool, role});
+
+  function say(text, bad) {
+    clearTimeout(statusTimer);
+    $status.className = 'status' + (bad ? ' err' : '');
+    $status.textContent = text;
+    statusTimer = setTimeout(load, 4000);
+  }
+
+  // 🛑 Набор панелей помнится ДВАЖДЫ и по-разному, это не дубль:
+  //  - sessionStorage — набор ЭТОГО окна: переживает перезагрузку вкладки, а соседнее окно ведёт
+  //    свой. Раньше хранилось только общее, и второе окно повторяло чужой набор.
+  //    ⚠️ При открытии окна через window.open браузер КОПИРУЕТ в него sessionStorage открывателя
+  //    — поэтому окно панели (pane.html) чистит этот ключ у себя на входе.
+  //  - localStorage — «последний собранный», затравка для окна, открытого впервые.
+  function save() {
+    const data = JSON.stringify(panes.map(plain));
+    try { sessionStorage.setItem(KEY, data); } catch (e) {}
+    try { localStorage.setItem(KEY, data); } catch (e) {}
+  }
+  // Содержимое хранилища — не наш код: там может лежать мусор, чужая версия формата или запись
+  // с неизвестным видом. Без проверки формы страница падала бы на восстановлении и больше его
+  // не пробовала, а неизвестный вид молча открывал бы пульт цеха под чужой подписью.
+  function remembered() {
+    for (const store of [sessionStorage, localStorage]) {
+      let v = null;
+      try { v = JSON.parse(store.getItem(KEY) || 'null'); } catch (e) { v = null; }
+      if (Array.isArray(v)) {
+        return v.filter(x => x && ['role', 'pool', 'desk', 'files'].includes(x.kind)
+                          && (x.kind !== 'role' || (x.pool && x.role))
+                          && (x.kind !== 'pool' || x.pool))
+                .map(x => ({kind: x.kind, pool: String(x.pool || ''), role: String(x.role || '')}));
+      }
+    }
+    return [];
+  }
+  function layout() {
+    const n = panes.length;
+    $panes.className = n === 0 ? 'n0' : n <= 9 ? 'n' + n : 'many';
+    const empty = $panes.querySelector('.empty');
+    if (empty) empty.hidden = n > 0;
+    markOpen();
+  }
+  function focus(p) {
+    panes.forEach(x => x.el.classList.toggle('focus', x === p));
+    p.el.scrollIntoView({block: 'nearest'});
+    p.el.querySelector('iframe')?.focus();
+  }
+  function open(spec) {
+    const had = panes.find(x => same(x, spec));
+    if (had) { focus(had); return had; }
+    // Уже вынесено в отдельное окно — не заводим второе подключение к той же роли, а показываем
+    // то окно. Без этого клик по «погасшей» кнопке давал бы панель ВМЕСТЕ с открытым окном:
+    // два клиента на одно окно роли, и оно прыгает между их размерами.
+    const out = liveOut(spec);
+    if (out) { try { out.win.focus(); } catch (e) {} say('эта роль открыта отдельным окном'); return null; }
+    const p = {...plain(spec), el: document.createElement('section')};
+    p.el.className = 'pane';
+    const isFiles = p.kind === 'files';
+    p.el.innerHTML = `<header><span>${label(p)}</span>`
+      + (isFiles ? `<button data-a="refresh" title="перечитать список">⟳</button>`
+                 : (p.kind === 'desk' ? ''
+                    : `<button data-a="up" title="выбрать файл и отправить сюда">⤒</button>`
+                    + `<button data-a="files" title="файлы, которые положили для меня">⤓</button>`)
+                   + `<button data-a="out" title="вынести в отдельное окно">⧉</button>`)
+      + `<button data-a="max" title="во весь экран / обратно">⤢</button>`
+      + `<button data-a="close" title="закрыть панель">×</button></header>`;
+    if (isFiles) {
+      const box = document.createElement('div');
+      box.className = 'files';
+      box.innerHTML = '<div class="none">читаю ящик…</div>';
+      p.el.appendChild(box);
+      p.reload = () => fillFiles(p, box);
+      p.el.querySelector('[data-a=refresh]').onclick = (e) => { e.stopPropagation(); p.reload(); };
+      p.reload();
+    } else {
+      const fr = document.createElement('iframe');
+      fr.src = termUrl(p);
+      fr.title = p.el.querySelector('span').textContent;
+      // Полосы прокрутки и Ctrl+V внутри терминала — общая обвязка (panes.js): страница и
+      // терминал за прокси на одном адресе, поэтому дотянуться до содержимого рамки можно.
+      fr.addEventListener('load', () => dressFrame(fr, say));
+      p.el.appendChild(fr);
+      if (p.kind !== 'desk') armDrop(p);
+      p.el.querySelector('[data-a=out]').onclick = (e) => { e.stopPropagation(); popout(p); };
+      const bf = p.el.querySelector('[data-a=files]');
+      if (bf) bf.onclick = (e) => { e.stopPropagation(); open({kind: 'files', pool: p.pool, role: p.kind === 'role' ? p.role : ''}); };
+      // Выбор файла кнопкой — тот же путь, что перетаскивание. Нужен там, где перетаскивание
+      // недоступно: политика браузера на рабочей машине, планшет, узкое окно.
+      const bu = p.el.querySelector('[data-a=up]');
+      if (bu) bu.onclick = (e) => {
+        e.stopPropagation();
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.multiple = true;
+        inp.style.display = 'none';
+        inp.onchange = async () => { const fs = [...inp.files]; inp.remove(); if (fs.length) await sendFiles(p, fs); };
+        document.body.appendChild(inp);
+        inp.click();
+      };
+    }
+    p.el.addEventListener('mousedown', () => focus(p));
+    p.el.querySelector('[data-a=max]').onclick = (e) => { e.stopPropagation(); p.el.classList.toggle('max'); };
+    p.el.querySelector('[data-a=close]').onclick = (e) => { e.stopPropagation(); close(p); };
+    panes.push(p);
+    $panes.appendChild(p.el);
+    save(); layout(); focus(p);
+    return p;
+  }
+  // Закрытие панели убирает iframe → рвётся его соединение → ttyd шлёт процессу входа HUP →
+  // enter.sh убирает свой вид. Ничего дополнительно слать не надо.
+  function close(p) {
+    const i = panes.indexOf(p);
+    if (i < 0) return;
+    panes.splice(i, 1);
+    p.el.remove();
+    save(); layout();
+  }
+  // Отдельное окно: упрощённое (без вкладок и закладок), с коротким заголовком «пул / роль».
+  // ⚠️ Тонкую полосу адреса Chrome оставляет всегда — убрать её страница не вправе.
+  // Панель со страницы при этом ЗАКРЫВАЕТСЯ: иначе к одной роли останутся два подключения,
+  // и роль будет прыгать между размерами двух окон (window-size latest на ферме).
+  const human = (n) => n < 1024 ? n + " Б" : n < 1048576 ? (n / 1024).toFixed(0) + " КиБ"
+                     : n < 1073741824 ? (n / 1048576).toFixed(1) + " МиБ" : (n / 1073741824).toFixed(1) + " ГиБ";
+  const when = (t) => new Date(t * 1000).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'});
+
+  // Обратная дорога: что роли положили для владельца в `exchange/outbox`. Панель роли открывает
+  // тот же список, суженный до её подпапки, — «от кого файл» видно по месту, как и во входящих.
+  async function fillFiles(p, box) {
+    box.innerHTML = '<div class="none">читаю ящик…</div>';
+    let d;
+    try {
+      const r = await fetch('outbox.json?pool=' + encodeURIComponent(p.pool), {cache: 'no-store'});
+      d = await r.json();
+      if (!r.ok) throw new Error(d && d.error || ('HTTP ' + r.status));
+    } catch (e) {
+      box.innerHTML = '<div class="none">ящик не читается: ' + esc(e && e.message || e) + '</div>';
+      return;
+    }
+    if (d.error) { box.innerHTML = '<div class="none">' + esc(d.error) + '</div>'; return; }
+    // 🛑 В панели роли показываем ЕЁ файлы И файлы из корня ящика. Роль обычно кладёт файл прямо
+    // в outbox — так её учит записка обмена, — и жёсткий отбор по подпапке отвечал «роль ничего
+    // не положила» на положенный файл. Признак, который не отличает «нет файла» от «файл лежит
+    // рядом», для человека равен вранью.
+    const all = d.files || [];
+    const files = p.role ? all.filter(f => f.from === p.role || f.from === '') : all;
+    const mine = p.role ? files.filter(f => f.from === p.role).length : 0;
+    box.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.textContent = files.length
+      ? ('файлов: ' + files.length + (p.role ? ' — от ' + p.role + ': ' + mine + ', в общем ящике: ' + (files.length - mine) : ''))
+      : (p.role ? 'ни от роли ' + p.role + ', ни в общем ящике пула ничего нет'
+                : 'в ящике пусто — роли ещё ничего не положили');
+    box.appendChild(head);
+    for (const f of files) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const u = 'download?pool=' + encodeURIComponent(p.pool) + '&path=' + encodeURIComponent(f.path);
+      row.innerHTML = (f.from ? '<span class="who">' + esc(f.from) + '</span>'
+                              : '<span class="who" title="файл лежит в общем ящике пула — кто положил, не указано">общий</span>')
+        + '<span class="nm" title="' + esc(f.path) + '">' + esc(f.path) + '</span>'
+        + '<span class="meta">' + human(f.size) + ' · ' + when(f.mtime) + '</span>'
+        + '<a href="' + esc(u) + '">скачать</a>'
+        + '<span class="rm" title="убрать файл из ящика">убрать</span>';
+      row.querySelector('.rm').onclick = async () => {
+        // Спрашиваем: файл в ящике — единственный экземпляр того, что роль отдала.
+        if (!confirm('Убрать «' + f.path + '» из ящика? Файл будет удалён с сервера.')) return;
+        try {
+          const r = await fetch('remove?pool=' + encodeURIComponent(p.pool) + '&path=' + encodeURIComponent(f.path),
+                                {method: 'POST'});
+          const t = (await r.text()).trim();
+          if (!r.ok) { say(f.path + ': ' + t, true); return; }
+          say(f.path + ' убран из ящика');
+          p.reload();
+        } catch (e) { say('не убрался: ' + (e && e.message || e), true); }
+      };
+      box.appendChild(row);
+    }
+  }
+
+  // Перетащенный на панель файл уходит в приёмную пула: в подкаталог роли, если панель ролевая
+  // («подъящик — значит инфа роли», слово владельца), иначе в общий ящик — тогда письмо лиду.
+  // Файл НЕ кладётся страницей на диск: сервер отдаёт его штатному приёмнику доставки, у которого
+  // и живут отбор секретов, сохранение потеснённых экземпляров, журнал и письмо адресату.
+  // 🛑 Зона сброса включается по перетаскиванию НАД ВСЕЙ СТРАНИЦЕЙ, а не над панелью.
+  // Панель занята рамкой терминала: пока файл висит над ней, события забирает документ рамки
+  // (чужой), и до панели `dragenter` не доходит вовсе — владелец видел «панель не готова принять».
+  // Поэтому: страница узнаёт о перетаскивании у себя, включает зоны у всех панелей, и дальше
+  // события ловит уже сама зона — она лежит поверх рамки.
+  let dragDeep = 0;
+  const dragOn = () => document.body.classList.add('dragging');
+  const dragOff = () => { dragDeep = 0; document.body.classList.remove('dragging'); };
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  window.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDeep++; dragOn(); });
+  window.addEventListener('dragover', (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; dragOn(); });
+  window.addEventListener('dragleave', (e) => { if (--dragDeep <= 0 || !e.relatedTarget) dragOff(); });
+  // Файл, отпущенный мимо зоны, браузер иначе откроет вместо страницы — гасим и молчим.
+  window.addEventListener('drop', (e) => { e.preventDefault(); dragOff(); });
+  window.addEventListener('dragend', dragOff);
+
+  function armDrop(p) {
+    const zone = document.createElement('div');
+    zone.className = 'drop';
+    zone.textContent = p.kind === 'role'
+      ? 'отпустите — файл уйдёт роли ' + p.role + ' (в её подъящик)'
+      : 'отпустите — файл уйдёт в общий ящик пула ' + p.pool + ', письмо лиду';
+    p.el.appendChild(zone);
+    zone.addEventListener('dragenter', (e) => { e.preventDefault(); zone.classList.add('over'); });
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; zone.classList.add('over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+    zone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      zone.classList.remove('over');
+      dragOff();
+      const files = [...(e.dataTransfer ? e.dataTransfer.files : [])];
+      if (!files.length) return;
+      await sendFiles(p, files);
+    });
+  }
+
+  // Отправка файлов в приёмную — общая для перетаскивания и для выбора кнопкой.
+  async function sendFiles(p, files) {
+    {
+      const who = p.kind === 'role' ? p.role : '';
+      for (const f of files) {
+        say('везу ' + f.name + '…');
+        try {
+          const u = 'upload?pool=' + encodeURIComponent(p.pool)
+                  + (who ? '&role=' + encodeURIComponent(who) : '')
+                  + '&name=' + encodeURIComponent(f.name);
+          const r = await fetch(u, {method: 'POST', body: f});
+          const t = (await r.text()).trim();
+          // Причина отказа приезжает несколькими строками (приёмник говорит подробно) — в одну
+          // строку статуса кладём всё, а не первую строку: в первой обычно «приёмник отказал»,
+          // а сама причина во второй, и человек оставался бы без неё.
+          if (!r.ok) { say(f.name + ': ' + t.replace(/\s+/g, ' ').slice(0, 160), true); break; }
+          // Приёмник придерживает похожее на секреты — это не отказ, но человек должен увидеть.
+          const held = t.includes('придержал файл');
+          say(held ? (f.name + ': приёмник придержал — похоже на секреты, вези пультом')
+                   : (f.name + ' → ' + (who ? who : 'пул ' + p.pool) + ', письмо отправлено'), held);
+        } catch (err) {
+          say(f.name + ': не доехал — ' + (err && err.message || err), true);
+          break;
+        }
+      }
+    }
+  }
+  // Живо ли отдельное окно этой роли (владелец мог закрыть его сам — тогда запись выбрасываем).
+  function liveOut(spec) {
+    for (let i = outs.length - 1; i >= 0; i--) {
+      const o = outs[i];
+      let dead = true;
+      try { dead = !o.win || o.win.closed; } catch (e) { dead = true; }
+      if (dead) { outs.splice(i, 1); continue; }
+      if (same(o, spec)) return o;
+    }
+    return null;
+  }
+  function popout(p) {
+    const u = new URL('pane.html', location.href);
+    u.searchParams.set('kind', p.kind);
+    if (p.pool) u.searchParams.set('pool', p.pool);
+    if (p.role) u.searchParams.set('role', p.role);
+    if (ASKED) u.searchParams.set('term', TERM);   // только локальная проба через туннель
+    // 🛑 Имя окна должно быть РАЗНЫМ у разных ролей: с ним браузер переиспользует уже открытое
+    // окно. Запрещённые символы заменяем, а не выбрасываем, иначе «team-live/lead» и
+    // «teamlive/lead» дают одно имя — вынос второй роли молча увёл бы окно первой.
+    const key = [p.kind, p.pool, p.role].join('/');
+    const name = 'shopweb_' + key.replace(/[^A-Za-z0-9]/g, c => '_' + c.charCodeAt(0).toString(16));
+    const w = window.open(u.href, name, 'popup=yes,width=1000,height=680');
+    if (!w) { say('браузер не дал открыть окно — разрешите всплывающие окна для этого адреса', true); return; }
+    outs.push({...plain(p), win: w});
+    close(p);
+    try { w.focus(); } catch (e) {}
+  }
+  function markOpen() {
+    $pools.querySelectorAll('.role').forEach(b => {
+      const spec = {kind: 'role', pool: b.dataset.pool, role: b.dataset.role};
+      const out = liveOut(spec);
+      b.classList.toggle('open', panes.some(x => same(x, spec)) || !!out);
+      if (out) b.title = 'открыта отдельным окном — нажмите, чтобы показать его';
+      else if (b.dataset.alive === '1') b.title = 'открыть окно роли';
+    });
+  }
+  // Та же форма имени, что проверяет web-entry.sh на сервере: имя не по форме открыть нельзя,
+  // и лучше сказать это до клика, чем отказом в панели.
+  const NAME_OK = /^[a-z0-9._-]{1,64}$/;
+  function render() {
+    $pools.innerHTML = '';
+    if (!roster) return;
+    for (const pool of roster.pools) {
+      const d = document.createElement('div');
+      d.className = 'pool';
+      const poolOk = NAME_OK.test(pool.name);
+      const live = pool.roles.filter(r => r.alive && NAME_OK.test(r.name));
+      d.innerHTML = `<div class="pool-name"><span>${esc(pool.name)}</span>`
+        + `<button data-a="all" title="открыть панели всех живых ролей пула">все</button>`
+        + `<button data-a="files" title="что роли положили для меня — забрать">⤓</button>`
+        + `<button data-a="dash" title="пульт смены этого пула">пульт</button></div>`;
+      const bAll = d.querySelector('[data-a=all]'), bDash = d.querySelector('[data-a=dash]');
+      const bFiles = d.querySelector('[data-a=files]');
+      if (poolOk) bFiles.onclick = () => open({kind: 'files', pool: pool.name, role: ''});
+      else { bFiles.disabled = true; bFiles.title = 'имя пула не по форме'; }
+      if (poolOk) bDash.onclick = () => open({kind: 'pool', pool: pool.name, role: ''});
+      else { bDash.disabled = true; bDash.title = 'имя пула не по форме для входа (a-z 0-9 . _ -)'; }
+      if (poolOk && live.length) {
+        bAll.textContent = 'все ' + live.length;
+        bAll.onclick = () => {
+          live.forEach(r => open({kind: 'role', pool: pool.name, role: r.name}));
+          // Роль видит ровно ту ширину и высоту, что у её панели: окно на ферме принимает размер
+          // клиента, который трогал его последним. Мелкая ячейка = узкий экран у самой роли, и
+          // остаётся он таким и после закрытия панели, пока к окну не подключится кто-то крупнее.
+          if (panes.length > 4) say('панелей ' + panes.length + ': роли увидят узкий экран — разворачивайте нужную ⤢ или выносите ⧉ в окно');
+        };
+      } else {
+        bAll.disabled = true;
+        bAll.title = poolOk ? 'живых ролей в пуле нет' : 'имя пула не по форме для входа (a-z 0-9 . _ -)';
+      }
+      for (const r of pool.roles) {
+        const b = document.createElement('button');
+        b.className = 'role' + (r.alive ? '' : ' dead');
+        b.dataset.pool = pool.name; b.dataset.role = r.name; b.dataset.alive = r.alive ? '1' : '0';
+        b.textContent = r.name;
+        if (poolOk && NAME_OK.test(r.name)) {
+          b.title = r.alive ? 'открыть окно роли' : 'внутри никто не работает — окно с трейсом';
+          b.onclick = () => open({kind: 'role', pool: pool.name, role: r.name});
+        } else {
+          b.disabled = true;
+          b.title = 'имя не по форме для входа (a-z 0-9 . _ -)';
+        }
+        d.appendChild(b);
+      }
+      $pools.appendChild(d);
+    }
+    markOpen();
+  }
+  const known = (spec) => {
+    if (!roster || roster.error) return true;   // списка нет — не выбрасывать
+    if (spec.kind === 'desk') return true;
+    const pool = roster.pools.find(p => p.name === spec.pool);
+    if (!pool) return false;
+    if (spec.kind === 'files') return true;   // ящик пула жив и когда роли погашены
+    return spec.kind === 'pool' || pool.roles.some(r => r.name === spec.role);
+  };
+  let restored = false, lastKey = '';
+  async function load() {
+    try {
+      const r = await fetch('roster.json', {cache: 'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      roster = await r.json();
+      // Перерисовывать список только когда он изменился: пересборка кнопок каждые 15 с
+      // съедала клик, пришедшийся на момент обновления.
+      const key = JSON.stringify([roster.pools, roster.error || '']);
+      if (key !== lastKey) { lastKey = key; render(); }
+      markOpen();   // окно, вынесенное ⧉, владелец мог закрыть — подсветка обязана это заметить
+      clearTimeout(statusTimer);
+      if (roster.error) {
+        $status.className = 'status err';
+        $status.textContent = 'ферму не спросить: ' + roster.error;
+      } else {
+        const v = roster.views || [];
+        const live = v.reduce((n, x) => n + (x.live_windows || 0), 0);
+        $status.className = 'status' + (live ? ' err' : '');
+        $status.textContent = (roster.pools.length ? `пулов: ${roster.pools.length}` : 'сессий пулов нет')
+          + (v.length ? ` · брошенных видов: ${v.length}` + (live ? `, живых окон в них: ${live}` : '') : '');
+      }
+      if (!restored) {
+        // Панели прошлого визита — но только те, что сейчас подняты: панель на погашенную роль
+        // встала бы заставой «не поднята» и висела бы под именем роли.
+        restored = true;
+        remembered().filter(known).forEach(open);
+        save(); layout();
+      }
+    } catch (e) {
+      $status.className = 'status err';
+      $status.textContent = 'список не читается: ' + (e && e.message || e);
+    }
+  }
+  document.getElementById('desk').onclick = () => open({kind: 'desk', pool: '', role: ''});
+  document.getElementById('reload').onclick = load;
+  setInterval(load, 15000);
+  setInterval(() => { $clock.textContent = new Date().toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'}); }, 1000);
+  // Клик внутри iframe наружу не всплывает: рамку «где печатаю» ставим по тому, какой iframe
+  // получил фокус (страница при этом теряет свой — событие blur).
+  window.addEventListener('blur', () => setTimeout(() => {
+    const a = document.activeElement;
+    const p = panes.find(x => x.el.contains(a));
+    if (p) panes.forEach(x => x.el.classList.toggle('focus', x === p));
+  }, 0));
+  layout();
+  load();
+})();
+</script>
+</body>
+</html>
