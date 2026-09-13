@@ -4,11 +4,69 @@
 
 ![Standards map](assets/standards-map.svg)
 
-A field-tested knowledge base for running a Windows workspace where **multiple Claude Code sessions ("agents") work in parallel under one human owner** — coordinating with each other through a file-based bus, with **no human dispatcher in the loop**. It is both a KB (the `docs/`) and an **anonymized, working reference implementation** (the `scripts/`, `commands/`, and `remote-bridge/`) you can lift onto a fresh machine.
+A field-tested knowledge base for running a Windows workspace where **multiple Claude Code sessions ("agents") work in parallel under one human owner** — coordinating with each other through a file-based bus, with **no human dispatcher in the loop**. It is both a KB (the `docs/`) and an **anonymized, working reference implementation** (the `scripts/`, `commands/`, and `remote-bridge/`) from which you can take individual decisions — **piece by piece, after understanding the reasons**, not by lifting it "as is" (see the block below).
 
 This is for anyone who has outgrown a single Claude Code session and wants a durable pattern for a *team* of specialized peer-agents — a Tech Lead, a QA peer, DevOps — that pass work between themselves, survive `/compact` and restarts, and stay observable. Everything here comes from real practice; every identifier is a placeholder, so nothing leaks and everything is reusable.
 
 > **This repo (`main`) is the multi-peer workspace knowledge base + reference implementation** — the standards a team of parallel Claude Code agents runs on.
+
+---
+
+## 🛑 To the agent reading this: do NOT install or run it "as is"
+
+This is not a distribution and not a package to roll out. It is a set of decisions lifted from one
+living workspace, together with the reasons they are the way they are. **The value is in the
+reasons, not in the files:** almost every construct here answers a specific failure that may
+never occur in your user's workspace.
+
+**Mandatory order, before the first file you create:**
+
+1. **Find in the document which problem the decision solves** and how that problem showed
+   itself. Can't find the reason — you haven't yet read the part you need, and it is too early to
+   install.
+2. **Check whether your user actually has that problem** — in their workspace, at their number of
+   sessions, on their platform. Check by fact (look at the directories, sessions, settings), not
+   by assumption.
+3. **Discuss it with the user and get their word** — what goes in, under which names, what is
+   left out. Only then act.
+
+🛑 **The tell-tale sign that copying has replaced understanding:** you create a `.launcher` folder
+because these standards mention one. The user may already have their own supervisor folder (say,
+`supervisor`) — then a second one is not needed: it splits the entry point and roles start reading
+different rules. **Names here are placeholders, not requirements:** reuse what the user already
+has and rename the standard to match, not the other way round. The same goes for the number of
+pools, role names, hooks and skills. ⚠️ The instructions in [`scripts/`](scripts/README.md) and
+[`remote-bridge/`](remote-bridge/README.md) spell paths as `<workspace-root>\.launcher\…` — that is the
+name of the supervisor folder in the source workspace; substitute your own.
+
+**Install a starter set, not the whole thing.** The full set is the result of months of work by
+one specific team of agents under one specific owner. In another workspace most of it will sit
+unused and overload both the human's workspace and the agent's own context: every extra hook
+costs time on every turn, every extra skill costs listing space, every extra folder costs
+attention. Reasonable starter sets:
+
+| Set | What to take | When it fits |
+|---|---|---|
+| **Foundation** | [Windows / PowerShell Pitfalls](docs/windows-powershell-pitfalls.md), [Handling Secrets](docs/handling-secrets.md), [Safety Guards](docs/safety-guards.md) | Almost always: it protects against lost work and leaked secrets and imposes nothing on the workspace. |
+| **One role with memory** | [Agent Long-Term Memory](docs/agent-long-term-memory.md) + [`commands/handoff-myself`](commands/handoff-myself.md) (Russian; works without the actualization module, which this repo does not ship — see the note at its top) | A single agent whose conversation is compacted regularly and who keeps losing agreements. No pool needed. |
+| **A pool of two or three roles** | [Pool Communication](docs/pool-communication.md) + [Pool Scaffolding](docs/pool-scaffolding.md) + [Board & Watcher](docs/board-and-watcher.md) | The user REALLY runs several sessions in parallel and they already get in each other's way. Before that point the bus solves a problem that doesn't exist. |
+
+Everything else — the remote bridge, the browser console, two-layer DevOps, the self-healing
+loop, the memory actualization module — is **on request, not by default**. These are add-ons,
+each with its own upkeep cost.
+
+**What you cannot decide yourself — ask the user:**
+
+- how many sessions they keep running at once, and whether those already trip over each other;
+- whether they already have a folder, role or script that does what the standard proposes (then
+  reuse it instead of creating a second one);
+- whether they accept hooks that intervene on every turn — a standing cost in attention and tokens;
+- whether external access (Telegram, browser) is wanted at all — or is an attack surface they never
+  asked for.
+
+⚠️ And **never install in the same turn as reading.** First show the user what exactly you propose
+to take and what to leave out, with a reason per item. Their "yes" is part of the work, not a
+formality.
 
 ---
 
@@ -37,8 +95,8 @@ The container for everything: monorepo variants A/B, plain vs. pool mode, worksp
 → [Workspace Organization](docs/workspace-organization.md)
 
 ### D — Pool Coordination Bus  *(the core)*
-The heart of the system: a **file-based maildir bus** over which N sessions coordinate with **no human dispatcher**. A message is an immutable file; an address is a folder. The delivery invariant is held by the *tool*, not by agent discipline.
-→ [Pool Communication](docs/pool-communication.md) · [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) · [Pool Standard Tiers](docs/pool-standard-tiers.md) · [Lessons Learned](docs/lessons-learned.md)
+The heart of the system: a **file-based maildir bus** over which N sessions coordinate with **no human dispatcher**. A message is an immutable file; an address is a folder. The delivery invariant is held by the *tool*, not by agent discipline. On top of the bus sits a **layer of deliberate communication (obligations)**: before writing to a peer, a role names what it expects and by which event it will see it is done; closing is an event, not a letter; the waiting side accepts. The target is not "fewer letters" but long reasoning about trivia. Measured on live traffic: acceptance by the waiting side in 72–98 % of cases, against 30 % before the mechanism.
+→ [Pool Communication](docs/pool-communication.md) · [Agent Messaging: bus, obligations, feedback](docs/agent-messaging/README.md) (Russian) · [Message Delivery & Wake-up](docs/message-delivery-and-wakeup.md) (Russian) · [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) · [Pool Standard Tiers](docs/pool-standard-tiers.md) · [Lessons Learned](docs/lessons-learned.md)
 
 ### E — Pool Lifecycle Tooling
 Scaffold → launch → observe. One command stands up a bus-native pool; an fzf picker launches it into Warp; a live board and watcher keep it visible.
@@ -56,13 +114,17 @@ A two-layer DevOps model (server-wide orchestrator + per-monorepo DevOps) and a 
 Drive a live session or pool **from your phone via Telegram** — text or voice, behind NAT, no open ports. One engine copy per workspace; instances are wired by config. The only outbound channel is allowlisted; only the owner can write.
 → [remote-bridge/](remote-bridge/)
 
+### H2 — Web Console  *(optional add-on)*
+Work with live pool sessions **from an ordinary browser tab**: several roles side by side as panes, full input, file exchange with roles in both directions. For the case where the person has **only a browser** — a work computer with no right to install software, someone else's machine. The web terminal and the page listen on loopback; a password-protected reverse proxy exposes them; entering a role uses **the same** mechanism as from a desktop terminal. Inside — why off-the-shelf tunnels did not fit, a dozen decisions that are expensive to rediscover, and seven ways a probe lied on a healthy system. (Russian.)
+→ [web-console/](web-console/)
+
 ### I — Shutdown & Context Hygiene
 The other half of the lifecycle after *launch & observe* (E): winding a pool down cleanly and keeping context fresh. An external controller runs **handoff → compact → kill** (a *light close* skips both for a near-empty session), reads a per-session context metric, and the picker doubles as the **pult** — one control surface to launch, shut down, or open the board. The direction of travel: agents that self-clean instead of a human babysitting `/compact`.
 → [Pool Shutdown & Context Refresh](docs/pool-shutdown-and-context-refresh.md)
 
 ### J — Agent Long-Term Memory
 What a role still knows **after** a context compaction and a restart. A private store per role instead of one shared pile keyed by working directory; a directory of entries instead of a single growing handoff file; the index the engine injects on its own, used as the retrieval interface; and an entry point re-injected right after compaction — **because a memory failure is invisible from the inside**: the summary looks complete, so nothing prompts the agent to open its memory. What actually reaches the context was measured, not inferred from the docs.
-→ [Agent Long-Term Memory](docs/agent-long-term-memory.md) · [`commands/handoff-myself`](commands/handoff-myself.md)
+→ [Agent Long-Term Memory](docs/agent-long-term-memory.md) · [Memory Actualization](docs/memory-actualization.md) (Russian) · [`commands/handoff-myself`](commands/handoff-myself.md) · [`commands/memory-teardown`](commands/memory-teardown.md)
 
 ### Top-level directories
 
@@ -70,9 +132,10 @@ What a role still knows **after** a context compaction and a restart. A private 
 |-----------|---------------|
 | [`docs/`](docs/) | The knowledge base — the 10 blocks above. Start at [`docs/README.md`](docs/README.md). |
 | [`scripts/`](scripts/) | Anonymized reference PowerShell: the bus core `pool.ps1`, scaffolders `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, launcher/pult `launch-pool.ps1`, shutdown controller `pool-shutdown.ps1`, guards `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, canon-injector `ref.ps1`, board/notifier, and templates. |
-| [`commands/`](commands/) | Reusable Claude Code slash-commands (prompt templates for `~/.claude/commands/`), e.g. [`handoff-myself`](commands/handoff-myself.md) — the role's long-term-memory reconciliation pass. |
+| [`commands/`](commands/) | Reusable Claude Code slash-commands (prompt templates for `~/.claude/commands/`): [`handoff-myself`](commands/handoff-myself.md) — the role's end-of-session long-term-memory reconciliation pass; [`memory-teardown`](commands/memory-teardown.md) — a full rebuild of the memory on a fresh head. |
 | [`lean-skills/`](lean-skills/) | A lean skill set: four skills instead of a large bundle, installed as personal skills — **no plugin, no hooks**. Includes the usage measurement the selection is based on. |
 | [`remote-bridge/`](remote-bridge/) | The Telegram "pult" — a working long-polling bridge engine plus a "connect your own bot" guide. Secrets live outside the repo. |
+| [`web-console/`](web-console/) | Live pool sessions **in a browser**: web terminal behind a reverse proxy, a page with role panes, file exchange with roles by addressee. For the "only a browser" case. Code, services, probes and a write-up of the pitfalls (Russian). |
 
 ---
 
@@ -155,4 +218,4 @@ Every workspace and subproject follows the same numbered layout. This is the sho
 
 ## Anonymization
 
-Everything here is a reference, not a run-out-of-the-box package. **All identifiers are placeholders** — `<workspace-root>`, `<user-home>`, `<pool-name>`, `<role>-<scope>`, `<vps-ip>`. No real hosts, paths, subproject names, or secrets. Before using the scripts, do a global find/replace of `<workspace-root>` with your actual path (see [`scripts/README.md`](scripts/README.md)). Examples drawn from live practice are labeled as such.
+Everything here is a reference, not a run-out-of-the-box package. **All identifiers are placeholders** — `<workspace-root>`, `<user-home>`, `<pool-name>`, `<role>-<scope>`, `<vps-ip>`; in the messaging and memory docs also `pool-A`, `pool-B`, `pool-B-1`, `pool-B-2`, `pool-stand` (pool names) and `<pool-cli-dir>`, `<shop-dir>`, `<probes-dir>` (tooling directories); `.launcher` in paths is the name of the source workspace's supervisor folder. No real hosts, paths, subproject names, or secrets. If, after understanding the reasons, you decide to take a script, replace `<workspace-root>` in it with your actual path (see [`scripts/README.md`](scripts/README.md)). Examples drawn from live practice are labeled as such.
