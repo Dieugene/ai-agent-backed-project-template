@@ -6,7 +6,9 @@
 #
 # Source is UTF-8 WITH BOM -> Cyrillic in comments/strings is safe here (was ASCII-only until 2026-07-27).
 # Do NOT strip the BOM: PS 5.1 would then read this file as cp1251 and mangle every Cyrillic byte.
-# NB: selftest.ps1 has NO BOM - that file really is ASCII-only, keep Cyrillic out of it.
+# NB: selftest.ps1 is ALSO UTF-8 with BOM now (checked bytes 2026-08-21; its old "no BOM" header lied).
+# Keep its BOM for the same reason; its test DATA is still built from codepoints where it must survive
+# an external-process round-trip.
 # Message BODIES are written/read as UTF-8 without BOM at runtime, so Cyrillic DATA is safe either way.
 #
 # Maildir model: one immutable file = one message; recipient = folder; state = folder; transition = atomic rename.
@@ -26,7 +28,11 @@
 #   pool.ps1 claim   -Owner <o> -Id <id> -BusRoot <d>
 #   pool.ps1 ack     -Owner <o> -Id <id> -BusRoot <d>
 #   pool.ps1 dismiss -Owner <o> -Id <id> -BusRoot <d> # clear a note (new/ -> archive, one step, no claim/ack)
+#   pool.ps1 close   -Owner <o> -Key <k> [-Outcome fulfilled] [-Body <t>] -BusRoot <d>  # close an obligation WITHOUT a letter
+#   pool.ps1 amend   -Owner <o> -Key <k> [-Expect <t>] [-CloseWhen <t>] -BusRoot <d>    # the OPENER fixes his own wording
 #   pool.ps1 ready   -Owner <o> -BusRoot <d>          # confirm readiness for shutdown (ONLY way to set the flag)
+#   pool.ps1 handoff -Owner <o>                       # START of memory handoff: rebuild the revision list and compute
+#                                                     # helper verdicts in the background (first line of /handoff-myself)
 #   pool.ps1 check   -Owner <o> -BusRoot <d>          # one watcher detection pass
 #   pool.ps1 watch   -Owner <o> -BusRoot <d> [-IntervalSeconds 45]   # background sleeping watcher (one-shot: fires, exits, must be re-armed)
 #   pool.ps1 monitor -Owner <o> -BusRoot <d> [-IntervalSeconds 20]   # CONTINUOUS sibling of watch: arm with the Monitor tool (persistent), never exits
@@ -35,13 +41,21 @@
 #   pool.ps1 board   -BusRoot <d> [-Watch | -Show] [-IntervalSeconds 8]   # table; -Watch=live here; -Show=open live board in a NEW window
 #   pool.ps1 help
 #
+# Obligations (optional; work on send/reply/note):
+#   -Opens <key> -Expect <text> -CloseWhen <text>   open one: WHAT is required, and by which
+#                                                   event the WAITING side sees it is done
+#   -About <key>                                    this letter belongs to that obligation
+#   -Closes <key> -Outcome fulfilled                close it (the other outcome is withdrawn)
+# `close` and `amend` are EVENTS, not letters: they land in archive/, in nobody's mailbox,
+# and cost the other side no turn. Nothing is validated at send time - ever.
+# Spell names in FULL: -Close, -O and -K are all ambiguous now.
 # note = a message, not a task: hidden from the board, shown in a separate [POOL NOTE] inbox section,
 # cleared with `dismiss` (no claim/ack). Plain `note` is quiet (picked up by the hook on the next turn);
 # `note -Wake` also wakes an idle watcher, exactly like a task.
 
 param(
   [Parameter(Mandatory,Position=0)]
-  [ValidateSet('send','reply','note','inbox','mine','claim','ack','dismiss','ready','check','watch','monitor','hook','activity','armgate','board','help')]
+  [ValidateSet('send','reply','note','inbox','mine','claim','ack','dismiss','close','amend','ready','handoff','check','watch','monitor','hook','activity','armgate','board','help')]
   [string]$Cmd,
   [string]$To, [string]$From, [string]$Owner, [string]$Subject,
   [string]$Body, [string]$BodyFile, [string]$Id, [string]$InReplyTo,
@@ -51,11 +65,19 @@ param(
   [switch]$Watch,
   [switch]$Show,
   [switch]$Wake,
-  [switch]$Notify
+  [switch]$Notify,
+  # --- Обязательства. 🛑 В КОНЦЕ намеренно: вставка в середину param() сдвинула бы
+  # неявные позиции всех параметров ниже, а позиционные вызовы движка существуют.
+  # ⚠️ Сокращения стали неоднозначны: -Close (CloseWhen/Closes), -O (Owner/Opens/Outcome),
+  # -K (Kind/Key). Писать только полными именами.
+  [string]$Opens, [string]$CloseWhen, [string]$About, [string]$Closes,
+  [string]$Outcome, [string]$Expect, [string]$Key
 )
 
 $ErrorActionPreference = 'Stop'
 $script:U8 = New-Object System.Text.UTF8Encoding($false)
+# Объявлено заранее: под Set-StrictMode обращение к необъявленной переменной бросает.
+$script:Amends = ''
 
 if (-not $BusRoot) { $BusRoot = $env:POOL_BUS_ROOT }
 if (-not $Owner)   { $Owner   = $env:AGENT_OWNER }
@@ -168,6 +190,53 @@ function Is-Wakeable([string]$name) {
   $true
 }
 
+function Format-HeaderValue([string]$v) {
+  # Единственное преобразование значения — чтобы оно не разорвало таблицу шапки: вертикальная
+  # черта добавила бы колонок, перевод строки оборвал бы строку на середине. Это САНИТИЗАЦИЯ,
+  # а не отказ: письмо уходит в любом случае, а разборщик возвращает исходный текст одной
+  # обратной заменой «\|» -> «|».
+  if ([string]::IsNullOrEmpty($v)) { return '' }
+  ($v -replace "`r`n", ' ' -replace "`n", ' ' -replace "`r", ' ') -replace '\|', '\|'
+}
+
+function Get-HomePoolRow {
+  # Строка `FromPool` для письма, уходящего в ЧУЖУЮ шину. Домашняя шина отправителя — в его
+  # окружении; имя пула — в манифесте рядом с ней. Роль ничего не вводит и соврать не может.
+  # Пусто в трёх случаях: окружения нет (запуск руками), шина та же (письмо внутри пула),
+  # имя не выяснилось. Во всех трёх поведение прежнее — поле просто не появляется.
+  try {
+    $hb = $env:POOL_BUS_ROOT
+    if (-not $hb) { return '' }
+    $hb = [System.IO.Path]::GetFullPath($hb)
+    if ($hb -eq $BusRoot) { return '' }
+    $dir = [System.IO.Path]::GetDirectoryName($hb)
+    if (-not $dir) { return '' }
+    $slug = ''
+    $mf = Join-Path $dir 'pool.manifest.json'
+    if (Test-Path -LiteralPath $mf) {
+      try { $slug = [string](((Read-Utf8 $mf) | ConvertFrom-Json).slug) } catch { $slug = '' }
+    }
+    if (-not $slug) { $slug = [System.IO.Path]::GetFileName($dir) }
+    if (-not $slug) { return '' }
+    return "| FromPool | " + (Format-HeaderValue $slug) + " |`n"
+  } catch { return '' }
+}
+
+function Get-ObligationRows {
+  # Читаем параметры скрипта ЯВНО через $script:. Без префикса PowerShell ищет их динамически —
+  # по цепочке вызова, — и локальная переменная с таким же именем в любом будущем внутреннем
+  # отправителе (Invoke-ArmGate уже зовёт Invoke-Send изнутри) молча уехала бы в шапку.
+  $rows = ''
+  if ($script:Opens)     { $rows += "| Opens | "     + (Format-HeaderValue $script:Opens)     + " |`n" }
+  if ($script:Amends)    { $rows += "| Amends | "    + (Format-HeaderValue $script:Amends)    + " |`n" }
+  if ($script:Expect)    { $rows += "| Expect | "    + (Format-HeaderValue $script:Expect)    + " |`n" }
+  if ($script:CloseWhen) { $rows += "| CloseWhen | " + (Format-HeaderValue $script:CloseWhen) + " |`n" }
+  if ($script:About)     { $rows += "| About | "     + (Format-HeaderValue $script:About)     + " |`n" }
+  if ($script:Closes)    { $rows += "| Closes | "    + (Format-HeaderValue $script:Closes)    + " |`n" }
+  if ($script:Outcome)   { $rows += "| Outcome | "   + (Format-HeaderValue $script:Outcome)   + " |`n" }
+  return [string]$rows   # тип фиксируем: лишний вывод внутри превратил бы это в массив, и
+}                        # конкатенация в шапке склеила бы элементы через пробел БЕЗ ошибки
+
 function Invoke-Send([string]$toOwner,[string]$fromOwner,[string]$subj,[string]$kind,[string]$inReplyTo,[string]$text) {
   Require-Bus
   if (-not $toOwner -or -not $fromOwner -or -not $subj) { throw 'send/reply require -To -From -Subject' }
@@ -180,14 +249,45 @@ function Invoke-Send([string]$toOwner,[string]$fromOwner,[string]$subj,[string]$
   $content = "# " + $subj + "`n`n" +
              "| Field | Value |`n|---|---|`n" +
              "| From | "   + $fromOwner + " |`n" +
+             [string](Get-HomePoolRow) +
              "| To | "     + $toOwner   + " |`n" +
              "| Date | "   + $iso       + " |`n" +
-             "| Thread | " + $thread    + " |`n`n" +
+             "| Thread | " + $thread    + " |`n" +
+             [string](Get-ObligationRows) + "`n" +
              $bodyText + "`n"
   $tmp   = Join-Path (Sub-Dir $toOwner 'tmp') ($id + '.tmp')
   $final = Join-Path (Sub-Dir $toOwner 'new') (("{0}.from-{1}.{2}.md") -f $id, $fromOwner, $kind)
   Write-Utf8 $tmp $content
   [System.IO.File]::Move($tmp, $final)   # atomic on same NTFS volume; target unique, so no overwrite path
+  $id
+}
+
+function Invoke-Event([string]$fromOwner,[string]$subj,[string]$kind,[string]$text) {
+  # Событие реестра, а не письмо: файл кладётся СРАЗУ в archive/, минуя чей-либо ящик. Смысл ровно
+  # в этом — закрыть обязательство или поправить его формулировку, не стоив другой стороне хода.
+  # Обходчик читает archive наравне с ящиками, поэтому событие попадает в свод тем же путём, что
+  # письмо, и переживает `--rebuild`: источник истины остаётся один — переписка, а не второй журнал.
+  # ⚠️ Права на операцию движок НЕ проверяет — как и на send: правило «правит инициатор, закрывает
+  # ждущий» держит обходчик, который видит реестр целиком и помечает чужое в bad.
+  Require-Bus
+  if (-not $fromOwner) { throw 'close/amend require -Owner (or $env:AGENT_OWNER)' }
+  $id  = New-MsgId
+  $iso = (Get-Date).ToString('o')
+  $content = "# " + $subj + "`n`n" +
+             "| Field | Value |`n|---|---|`n" +
+             "| From | "   + $fromOwner + " |`n" +
+             [string](Get-HomePoolRow) +
+             "| To | pool |`n" +
+             "| Date | "   + $iso + " |`n" +
+             "| Thread | " + $id + " |`n" +
+             [string](Get-ObligationRows) + "`n" +
+             $text + "`n"
+  # tmp — в служебном каталоге шины: имя начинается с точки, а такие каталоги обходчик пропускает,
+  # поэтому недописанный файл не может попасть ему на разбор даже на долю секунды.
+  $tmp   = Join-Path (Ensure-Dir (Join-Path $BusRoot '.tmp')) ($id + '.tmp')
+  $final = Join-Path (Archive-Dir) (("{0}.from-{1}.{2}.md") -f $id, $fromOwner, $kind)
+  Write-Utf8 $tmp $content
+  [System.IO.File]::Move($tmp, $final)
   $id
 }
 
@@ -231,12 +331,44 @@ function Invoke-Inbox([string]$o) {
 function Invoke-Claim([string]$o,[string]$mid) {
   Require-Bus
   if (-not $mid) { throw 'claim requires -Id' }
+  # Console -> UTF-8 FIRST and unconditionally, like hook/activity/mine: the 5.1 console host latches
+  # its writer encoding at the FIRST output line of the process, and an agent often runs SEVERAL
+  # claims in one powershell call (watch/monitor print them as a list) - a plain claim going first
+  # would latch cp866 and ship a later controller body as mojibake (reproduced live). Harmless for
+  # ASCII-only output; own try/catch because a headless host may refuse the setter.
+  try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
   $m = Get-ChildItem -Path (Sub-Dir $o 'new') -Filter ($mid + '.from-*.md') -File -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $m) { Write-Output ("CLAIM-MISS: {0} not in new/{1} (already taken/gone)" -f $mid, $o); return }
+  $p = Parse-MsgName $m.Name   # on the ORIGINAL name, before the move appends .pid.ms
   $base = [System.IO.Path]::GetFileNameWithoutExtension($m.Name)
   $dest = Join-Path (Sub-Dir $o 'cur') ("{0}.{1}.{2}.md" -f $base, $PID, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
   [System.IO.File]::Move($m.FullName, $dest)   # atomic rename = the claim; loser gets FileNotFound
+  # A pool-controller task gets its body PRINTED here, not pointed at. Twice (2026-07-27 pool-A lead,
+  # 2026-08-21 launcher) an agent claimed the shutdown task, never opened the body, and ran the procedure
+  # from memory - the second time straight past the "READ THIS FIRST" pointer, which settles it: a reminder
+  # is not a mechanism. Printing puts the instructions into the agent's context with no read step to skip.
+  # Other senders keep the short pointer on purpose (wake output stays lean; only the controller's task
+  # carries a procedure whose silent skip kills a session). Limits of this mechanism, accepted knowingly:
+  # a claim done by a SUBAGENT leaves the body in the subagent's context; a compaction between claim
+  # and execution drops the printed text (the task stays in cur/, `mine` re-points at it); and the
+  # `from-pool-controller` name is NOT authenticated - the bus trust model is cooperative, a neighbour
+  # could ship any body this way, printing merely raises what was already possible with a task file.
+  $ctlBody = $null
+  if ($p -and $p.from -eq 'pool-controller') {
+    try { $ctlBody = Read-Utf8 $dest } catch { $ctlBody = $null }
+    # fall through on failure: the body could not be read (locked/scanned) - the claim already happened,
+    # so the agent must still get the pointer rather than nothing. This fallback path has no test on
+    # purpose: locking the file between the Move above and this read cannot be done from a test.
+  }
   Write-Output ("CLAIMED: {0}" -f $mid)
+  if ($null -ne $ctlBody) {
+    # The truncation warning goes in the HEADER: a tool-output cap cuts the TAIL, so a warning there
+    # would be cut off together with what it warns about.
+    Write-Output ("--- TASK BODY, {0} chars. It ends with an END-OF-TASK-BODY line; if that line is missing below, the output was TRUNCATED - then read the file: {1} ---" -f $ctlBody.Length, $dest)
+    Write-Output $ctlBody
+    Write-Output "--- END-OF-TASK-BODY. Work from the text above; no need to re-read the file. ---"
+    return
+  }
   # Point at the file explicitly. Claiming is NOT reading: on 2026-07-27 a lead claimed a shutdown task,
   # never opened the body, and ran the procedure from memory - with a flag path that had moved a day earlier.
   # `mine` printed the path too, but buried among other lines; here it is the next thing the agent sees.
@@ -256,7 +388,7 @@ function Invoke-Ack([string]$o,[string]$mid) {
     ready - ЕДИНСТВЕННЫЙ способ подтвердить готовность к гашению.
 
     ЗАЧЕМ (инцидент 2026-07-27): раньше контроллер клал путь флага в тело задачи, а агент создавал файл
-    руками. Лид <pool-a> задачу заклеймил, тело НЕ открыл, выполнил процедуру по памяти прошлых гашений
+    руками. Лид pool-A задачу заклеймил, тело НЕ открыл, выполнил процедуру по памяти прошлых гашений
     и написал флаг по устаревшему пути (~\.claude\.control\ вместо шины). Контроллер флага не увидел ->
     «ТАЙМАУТ» -> роль осталась незакрытой. Путь, собранный агентом из текста, не может быть надёжным:
     он живёт в его памяти и переживает compact. Здесь путь знает СКРИПТ - ошибиться нечем.
@@ -269,7 +401,7 @@ function Invoke-Ack([string]$o,[string]$mid) {
       * Адрес флага НЕ параметр протокола: и шина, и owner берутся из env сессии, как во всех остальных
         командах. В тексте задачи путь остаётся только как справка для диагностики, не как инструкция.
       * Гард по «запись обновлена» СОЗНАТЕЛЬНО не ставится. Прежняя причина - handoff-файлы лежат не у
-        всех рядом с шиной (<sub-a> - 9 ролей в <umbrella>\<sub-a>\, operator <pool-a> - в 03_data\) - с
+        всех рядом с шиной (pool-X - 9 ролей в <pool-X>\, operator pool-A - в 03_data\) - с
         переездом памяти в <cwd>\.memory\<роль> отпала. Решение осталось тем же по причине СИЛЬНЕЕ:
         замер может не удаться сам по себе (хранилище пусто у ещё не переехавшей роли; MEMORY.md
         залочен ровно тем, что его переписывают), и гард отказывал бы роли, которая всё сделала.
@@ -279,14 +411,26 @@ function Invoke-Ready([string]$o) {
   Require-Bus
   if (-not $o) { throw 'ready requires -Owner (or set $env:AGENT_OWNER - normally your pool wrapper does)' }
   $cdir   = Join-Path $BusRoot '.control'
+  # An active shutdown is marked by EITHER file, and that is deliberate. `shutdown-intent-` is the
+  # QUARANTINE (watchers go silent under it) and phase 1 skips it for a role whose watcher was armed
+  # with older code - such a watcher could not be trusted to wake the role for the shutdown task itself.
+  # `shutdown-cycle-` is written ALWAYS and means only "a shutdown cycle is running": without it a role
+  # that was spared the quarantine had nothing to confirm against and hung until the controller timed
+  # out (live case 21.08.2026). Rationale in full: pool-shutdown.ps1, above Get-ShutdownPaths.
   $intent = Join-Path $cdir ("shutdown-intent-{0}" -f $o)
-  if (-not (Test-Path $intent)) {
+  $cycle  = Join-Path $cdir ("shutdown-cycle-{0}"  -f $o)
+  $mark = $null
+  if (Test-Path $cycle) { $mark = $cycle } elseif (Test-Path $intent) { $mark = $intent }
+  if (-not $mark) {
     Write-Output ("READY-REFUSED: no active shutdown for '{0}' - nothing to confirm." -f $o)
     Write-Output "  This flag authorizes the controller to KILL your session. With no live shutdown intent"
     Write-Output "  it would be a standing permission, so no flag is created."
     return
   }
-  $intentMs = [long]((Get-Item $intent).LastWriteTimeUtc - [datetime]'1970-01-01').TotalMilliseconds
+  # Floor, НЕ [long]: приведение в .NET округляет к ближайшему (1.5 -> 2), и метка «уезжала» на
+  # миллисекунду вперёд - задача, отправленная в ту же миллисекунду, читалась бы как чужая, из
+  # прошлого цикла. Замер: 101 промах на 300 попыток при отправке сразу после метки.
+  $intentMs = [long][math]::Floor(((Get-Item $mark).LastWriteTimeUtc - [datetime]'1970-01-01').TotalMilliseconds)
   $task = $null
   foreach ($d in @((Sub-Dir $o 'cur'), (Archive-Dir))) {
     foreach ($f in @(Get-ChildItem -Path $d -Filter '*.from-pool-controller.*' -File -ErrorAction SilentlyContinue)) {
@@ -493,7 +637,7 @@ function Test-ArmInFlight([string]$o) {
   return $false
 }
 # --- Heartbeat, rewritten 2026-08-03 after a field defect: `Set-Content` here killed the whole watcher on a
-# lock-file race. Six crashes across four roles in two days (<pool-a>, 30-31.07), two distinct failure texts on
+# lock-file race. Six crashes across four roles in two days (pool-A, 30-31.07), two distinct failure texts on
 # this one line: a sharing violation, and "stream is not readable" WITH A ZERO-BYTE lock left on disk.
 # The zero-byte outcome is the dangerous one: truncate succeeded, write did not. The board (Get-WatchState) only
 # looks at LastWriteTime, so it still reports `w on`; the arm-gate reads the CONTENT, gets pid 0, demands an arm -
@@ -636,10 +780,86 @@ function Invoke-Monitor([string]$o,[int]$interval) {
   }
 }
 
+# [MEMORY] line for the UserPromptSubmit hook: ONE line per turn while the role's memory anchor would not
+# survive a compaction, nothing otherwise - throttled to one line per MEMORY_NOTE_EVERY_MIN per role: the hook
+# also fires on machine wakes (a burst of 40 bus notifications would repeat the same line 40 times), and a
+# reminder needs to be more frequent than compactions (hours apart) and rarer than a wake burst (minutes).
+# Marker file: <BusRoot>\.control\memnote-<owner> (mtime = last print). Why here and not only in memory-audit: the PreCompact audit
+# output goes to the debug log, not into the model's context, and at `pool ready` the role can no longer
+# act - so a role with a 39 000-char anchor (delivered 10 % after compaction, launcher 17.08.2026) had NO
+# channel through which it could learn about it. The measurement is done by memory-inject.ps1 itself
+# (-Measure, in-process, ~7 ms) - same file choice, same header stripping, same limit as the real injection.
+# Silent on any failure: a hook must never block a turn, and a missing memory dir is a legitimate state.
+$script:MEMORY_NOTE_EVERY_MIN = 30
+function Get-MemoryAnchorNote([string]$o) {
+  try {
+    $inj = Join-Path $PSScriptRoot 'memory-inject.ps1'
+    if (-not (Test-Path -LiteralPath $inj)) { return $null }
+    $marker = $null
+    if ($BusRoot) {
+      $marker = Join-Path (Join-Path $BusRoot '.control') ("memnote-{0}" -f $o)
+      if (Test-Path -LiteralPath $marker) {
+        $age = ((Get-Date) - (Get-Item -LiteralPath $marker).LastWriteTime).TotalMinutes
+        if ($age -ge 0 -and $age -lt $script:MEMORY_NOTE_EVERY_MIN) { return $null }
+      }
+    }
+    $line = $null
+    foreach ($l in @(& $inj -Owner $o -Cwd (Get-Location).Path -Measure 2>&1)) { $t = "$l".TrimStart([char]0xFEFF); if ($t -match '^ANCHOR:') { $line = $t; break } }
+    if (-not $line) { return $null }
+    if ($line -match '^ANCHOR: empty') {
+      return ("[MEMORY] {0}: anchor task_session_state.md has only a header, no body - after a compaction you get a task list, not an entry point; write the state (where I stopped / next step / conditions)" -f $o)
+    }
+    if ($line -match '^ANCHOR: by=(name|index) chars=(\d+) limit=(\d+) delivered=(\d+) file=(.+)$') {
+      $by = $Matches[1]; $chars = [int]$Matches[2]; $lim = [int]$Matches[3]; $pct = [int]$Matches[4]; $file = $Matches[5].Trim()
+      if ($by -eq 'index') {
+        return ("[MEMORY] {0}: anchor NOT named task_session_state.md - after a compaction {1} (first task_ link of MEMORY.md) gets injected instead; create task_session_state.md (where I stopped / next step / conditions) and put its line first" -f $o, $file)
+      }
+      if ($chars -gt $lim) {
+        return ("[MEMORY] {0}: anchor task_session_state.md is {1} chars, after a compaction only {2} get injected ({3} %, middle cut out) - rewrite it as STATE under {2} chars (where I stopped / next step / conditions / open questions); done work goes to subject records, git keeps history" -f $o, $chars, $lim, $pct)
+      }
+      return $null
+    }
+    if ($line -match '^ANCHOR: none') {
+      return ("[MEMORY] {0}: no anchor task_session_state.md - after a compaction you get a task list, not an entry point; create it (where I stopped / next step / conditions) and put its line FIRST in MEMORY.md" -f $o)
+    }
+    return $null   # off (.noinject) / error: not the hook's business, the audit reports errors
+  } catch { return $null }
+}
+
+# Wall-clock stamp for the turn banner. In a long-lived session the system prompt's "today" is frozen at
+# start-up, so the agent has to be TOLD the time on every turn (owner's word 21.08.2026, relayed by
+# <supervisor-role>; the server side got the same). MSK is pinned explicitly instead of plain Get-Date, so
+# the stamp reads the same on any machine whatever its zone. Windows and Linux name the zone differently
+# -> both ids are tried; last resort is a fixed UTC+3 (MSK has had no DST since 2014 - the zone object still
+# reports SupportsDaylightSavingTime=true for the pre-2014 rules, which is why the fallback is a constant
+# offset and not that flag). Invariant culture: ':' in a custom format string is the CULTURE's time
+# separator, not a literal. ASCII only - cheap and encoding-proof.
+function Get-MskStamp {
+  foreach ($id in @('Russian Standard Time', 'Europe/Moscow')) {
+    try {
+      $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($id)
+      return [System.TimeZoneInfo]::ConvertTime([DateTimeOffset]::Now, $tz).ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+    } catch { }
+  }
+  return [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(3)).ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+}
+
 # UserPromptSubmit hook: env-driven, silent for non-pool sessions. Emits the [POOL INBOX] banner.
 function Invoke-Hook {
   if ([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($BusRoot)) { return }  # not a pool session
+  # Memory anchor line goes out even in quiet mode: it is not inbox noise, it stops the moment the anchor is fixed.
+  # Measured BEFORE our encoding is set: memory-inject.ps1 sets its own console encoding in-process.
+  $memNote = Get-MemoryAnchorNote $Owner
   [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+  # Time stamp goes ABOVE the quiet cut-off: it must reach the agent EVERY turn, empty inbox included.
+  # Wrapped like every other emitter here: the file runs under ErrorActionPreference=Stop with no top-level
+  # trap, so a throw would take the [MEMORY] and [POOL INBOX] lines down with it - the stamp must never be
+  # able to cost the role its inbox banner.
+  try { Write-Output ("[TIME] {0} MSK" -f (Get-MskStamp)) } catch { }
+  if ($memNote) {
+    Write-Output $memNote
+    try { $mk = Join-Path (Ensure-Dir (Join-Path $BusRoot '.control')) ("memnote-{0}" -f $Owner); [System.IO.File]::WriteAllText($mk, (Get-Date).ToString('o'), $script:U8) } catch { }
+  }
   # Quiet when inbox is clean (POOL_INBOX_QUIET=1): inject NOTHING that turn -> no per-turn banner accumulation.
   $pending = @(Get-ChildItem -Path (Sub-Dir $Owner 'new') -Filter '*.md' -File -ErrorAction SilentlyContinue)
   if ($pending.Count -eq 0 -and $env:POOL_INBOX_QUIET -eq '1') { return }
@@ -683,9 +903,9 @@ function Invoke-Activity {
         # НО ход бывает и НЕ агентский. Завершение фоновой задачи (одноразовый вотчер отстрелялся;
         # вытесненный chat_sentinel упал) харнесс кладёт в ТУ ЖЕ очередь промптов, что и ввод
         # человека -> новый promptId -> этот хук. Слепое стирание убивало флаг сразу после его
-        # создания: воспроизведено на operator/<pool-a> и methodist/<pool-b> 2026-07-27.
+        # создания: воспроизведено на operator/pool-A и methodist/pool-Y 2026-07-27.
         #
-        # Замер 2026-07-27 (транскрипты <pool-a> + <pool-b> + launcher): машинный ход несёт
+        # Замер 2026-07-27 (транскрипты pool-A + pool-Y + launcher): машинный ход несёт
         # origin.kind=task-notification / promptSource=system (1246 шт.) против typed/human (715),
         # разделение чистое, а ТЕКСТ такого хода буквально начинается с <task-notification>.
         # Матчим по СЫРОМУ payload, а не по имени поля: док обещает user_message, замер даёт
@@ -754,7 +974,7 @@ function Invoke-ArmGate {
   # Backoff counts ATTEMPTS, not seconds. Elapsed time cannot tell "the spawn is broken" from "the watcher armed,
   # fired and exited": both leave no live watcher at the next Stop. The old <30s window therefore disengaged the
   # gate silently in the very state where it matters most - a task waiting in new/ wakes a fresh watcher on its
-  # first poll, so the watcher dies within seconds of EVERY arm. (Incident 2026-07-27, <pool-a>/operator.)
+  # first poll, so the watcher dies within seconds of EVERY arm. (Incident 2026-07-27, pool-A/operator.)
   # Marker payload is "<blocks>|<iso>": the count is bumped only when this gate actually blocks, and reset only
   # when this gate sees a live watcher (above) - i.e. it counts consecutive arms that left nothing alive behind.
   # A pre-2026-07-27 ISO-only marker parses to 0, so the first Stop after rollout blocks (safe direction).
@@ -889,7 +1109,7 @@ function Write-MemoryFooter([object[]]$Rows, [string]$Bus, [string]$Tag) {
   $sgr = if ($noIndex.Count -or $maxPct -ge 100) { '91' } elseif ($have -eq 0) { '93' } else { '90' }
   Write-Output (Paint $line $sgr)
   # Подсказка обязана быть КОПИРУЕМОЙ. Тег в шапке борда - имя каталога рядом с шиной, а memory-board
-  # спрашивает СЛАГ манифеста; на первом же живом пуле они разошлись (`.launcher` против `<organizer-pool>`),
+  # спрашивает СЛАГ манифеста; на первом же живом пуле они разошлись (`.launcher` против `supervisors`),
   # и совет не сработал бы. Слаг берём из манифеста, если он лежит в cwd; не нашёлся - даём -All,
   # который верен всегда.
   $slug = $null
@@ -1041,6 +1261,98 @@ function Invoke-BoardLoop([int]$interval, [bool]$notify) {
 # Fills the gap inbox/board leave: an agent cannot otherwise see its OWN claimed (cur/) work after a
 # restart, because it does not remember the claim and inbox shows only new/. This is the manual
 # "self-recovery from cur/" of lease-v1: run `mine`, Read the printed cur/ file, resume; ack when done.
+function Get-JsonProp([object]$obj, [string]$name) {
+  # Свойство объекта из JSON — БЕЗОПАСНО. Прямое `$obj.name` под Set-StrictMode бросает, если
+  # свойства нет, и весь свод исчезает из-за одной неполной записи: роль перестаёт видеть свои
+  # обязательства, ничего об этом не узнав. Индексатор PSObject.Properties просто отдаёт $null.
+  try {
+    $p = $obj.PSObject.Properties[$name]
+    if ($p) { return [string]$p.Value }
+  } catch { }
+  ''
+}
+
+function Clip-Text([string]$t, [int]$max) {
+  # Значения полей — свободная проза агента, длина ничем не ограничена. Без обрезки одно
+  # многострочное ожидание вытеснит с экрана саму тарелку, ради которой роль зовёт mine.
+  if ([string]::IsNullOrEmpty($t)) { return '' }
+  if ($t.Length -le $max) { return [string]$t }
+  return [string]($t.Substring(0, $max - 1) + [char]0x2026)
+}
+
+function Get-CrossObligations([string]$o) {
+  # Обязательства роли в ЧУЖИХ шинах. Файл кладёт обходчик на проходе по всем пулам; нет файла
+  # (локальная машина, где обхода нет) — просто нет секции, а не ошибка. Причины те же, что у
+  # основного свода: `mine` поднимает роль, его падение стоит роли хода.
+  try {
+    if (-not $BusRoot -or -not $o) { return @() }
+    $p = Join-Path (Join-Path $BusRoot '.obligations') 'cross.json'
+    if (-not (Test-Path -LiteralPath $p)) { return @() }
+    $fi = Get-Item -LiteralPath $p
+    if ($fi.Length -gt 1MB) { return @() }
+    $cx = (Read-Utf8 $p) | ConvertFrom-Json
+    if (-not $cx) { return @() }
+    $roles = $cx.PSObject.Properties['roles']
+    if (-not $roles) { return @() }
+    $mine = $roles.Value.PSObject.Properties[$o]
+    if (-not $mine) { return @() }
+    $rows = @()
+    foreach ($b in @($mine.Value)) {
+      if ($null -eq $b) { continue }
+      $k = Get-JsonProp $b 'key'
+      if ([string]::IsNullOrWhiteSpace($k)) { continue }
+      $rows += [pscustomobject]@{
+        key        = $k
+        from       = Get-JsonProp $b 'from'
+        to         = Get-JsonProp $b 'to'
+        expect     = Get-JsonProp $b 'expect'
+        close_when = Get-JsonProp $b 'close_when'
+        bus        = Get-JsonProp $b 'bus'
+      }
+    }
+    return $rows
+  } catch { return @() }
+}
+
+function Get-OpenObligations([string]$o) {
+  try {
+    if (-not $BusRoot -or -not $o) { return $null }
+    $p = Join-Path (Join-Path $BusRoot '.obligations') 'index.json'
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    $fi = Get-Item -LiteralPath $p
+    # Потолок размера: без него раздувшийся индекс роль втягивала бы в память каждым подъёмом,
+    # а PS 5.1 сверх ~2 МБ и вовсе отказывается разбирать JSON — то есть платформы разошлись бы.
+    if ($fi.Length -gt 1MB) { return $null }
+    $ix = (Read-Utf8 $p) | ConvertFrom-Json
+    if (-not $ix) { return $null }
+    $rows = @()
+    $open = $ix.PSObject.Properties['open']
+    if (-not $open) { return $null }      # StrictMode: прямое $ix.open на чужой форме бросает
+    foreach ($b in @($open.Value)) {
+      if ($null -eq $b) { continue }
+      $k = Get-JsonProp $b 'key'
+      if ([string]::IsNullOrWhiteSpace($k)) { continue }
+      $rows += [pscustomobject]@{
+        key        = $k
+        from       = Get-JsonProp $b 'from'
+        to         = Get-JsonProp $b 'to'
+        expect     = Get-JsonProp $b 'expect'
+        close_when = Get-JsonProp $b 'close_when'
+      }
+    }
+    $age = 1e9
+    try {
+      $gen = Get-JsonProp $ix 'generated_at'
+      if ($gen) { $age = ((Get-Date) - [datetimeoffset]::Parse($gen)).TotalSeconds }
+      else { $age = ((Get-Date) - $fi.LastWriteTime).TotalSeconds }
+    } catch { $age = 1e9 }
+    [pscustomobject]@{
+      rows = @($rows | Where-Object { $_.from -eq $o -or $_.to -eq $o })
+      age  = [double]$age
+    }
+  } catch { $null }
+}
+
 function Invoke-Mine([string]$o) {
   Require-Bus
   [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)   # render Cyrillic subjects correctly across hosts
@@ -1070,7 +1382,86 @@ function Invoke-Mine([string]$o) {
     if ($p) { Write-Output ("   ~ {0} (from {1}): {2}" -f $p.id, $p.from, (First-Subject $f.FullName)) }
     Write-Output ("       file: {0}" -f $f.FullName)
   }
+  # Открытые обязательства роли. Показать — всё, что здесь делается: назвать по каждому исход
+  # («ещё жду / исполнено / снято») обязана сама роль по правилу § 2, движок этого не проверяет.
+  $ob = Get-OpenObligations $o
+  if ($ob -and $ob.rows.Count -gt 0) {
+    # Возраст индекса печатается всегда, а не проверяется порогом-выдумкой: обходчик ходит раз в
+    # минуту, значит десять пропущенных проходов — это уже «он не работает», и роль должна знать,
+    # что список мог устареть, а не считать закрытое открытым.
+    $stale = if ($ob.age -ge 600) { (" - собран {0} назад, мог устареть" -f (Format-Age $ob.age)) } else { '' }
+    Write-Output ("  -- open obligations ({0}){1}: name the outcome for each - waiting / fulfilled / withdrawn --" -f $ob.rows.Count, $stale)
+    $shown = 0
+    foreach ($b in $ob.rows) {
+      if ($shown -ge 5) { break }     # потолок строк: свод не должен вытеснять саму тарелку
+      $side = if ($b.from -eq $o) { "wait from " + $b.to } else { "owed to " + $b.from }
+      $head = if ($b.expect) { $b.expect } elseif ($b.close_when) { $b.close_when } else { '(формулировки нет)' }
+      Write-Output ("   ! {0} ({1}): {2}" -f $b.key, $side, (Clip-Text $head 160))
+      if ($b.expect -and $b.close_when) { Write-Output ("       closed when: {0}" -f (Clip-Text $b.close_when 160)) }
+      $shown++
+    }
+    if ($ob.rows.Count -gt $shown) { Write-Output ("     (+{0} more)" -f ($ob.rows.Count - $shown)) }
+  }
+  # Чужие шины — отдельной секцией, а не вперемешку: у этих обязательств другой адрес, и роль
+  # должна видеть, в чьей переписке они живут, иначе пойдёт закрывать их не там.
+  # @(...) обязательно: `return @()` из функции PowerShell отдаёт $null, а .Count на нём
+  # под строгим режимом бросает — и бросает ВНЕ try самой функции, то есть стоит роли хода.
+  $cross = @(Get-CrossObligations $o)
+  if ($cross.Count -gt 0) {
+    $cxAge = ''
+    try {
+      $cxp = Join-Path (Join-Path $BusRoot '.obligations') 'cross.json'
+      $secs = ((Get-Date) - (Get-Item -LiteralPath $cxp).LastWriteTime).TotalSeconds
+      if ($secs -ge 600) { $cxAge = (" - собрана {0} назад" -f (Format-Age $secs)) }
+    } catch { }
+    Write-Output ("  -- obligations in OTHER pools ({0}){1}: they live in that pool's bus, close them there --" -f $cross.Count, $cxAge)
+    $shownX = 0
+    foreach ($b in $cross) {
+      if ($shownX -ge 5) { break }
+      $side = if ($b.from -eq $o) { "wait from " + $b.to } else { "owed to " + $b.from }
+      $head = if ($b.expect) { $b.expect } elseif ($b.close_when) { $b.close_when } else { '(формулировки нет)' }
+      Write-Output ("   > [{0}] {1} ({2}): {3}" -f $b.bus, $b.key, $side, (Clip-Text $head 140))
+      $shownX++
+    }
+    if ($cross.Count -gt $shownX) { Write-Output ("     (+{0} more)" -f ($cross.Count - $shownX)) }
+  }
   Write-Output ("Done: pool.ps1 ack -Owner {0} -Id <id>   |   Take: pool.ps1 claim -Owner {0} -Id <id>   |   Clear note: pool.ps1 dismiss -Owner {0} -Id <id>" -f $o)
+}
+
+<#
+  handoff - первая строка канона свёртки памяти. Адрес памяти берётся из настроек роли
+  (<cwd>\.memory\.settings\<роль>.json, поле autoMemoryDirectory), а НЕ угадывается по имени: у
+  четырёх ролей-тёзок `lead` подъём по дереву брал первого попавшегося, а у qa-div шина и память лежат в
+  разных каталогах (оппонент 18.08 / 07.09). Нет настроек - громкий отказ, ничего не запускается: тихий
+  выход здесь узнавался бы на исходе контекста, когда закрыватель откажет по отсутствию штампа.
+  Что делает - memory-audit.ps1 -Reason handoff: сверка подсадной, сбор списка, расчёт вердиктов фоном.
+#>
+function Invoke-Handoff([string]$o) {
+  if (-not $o) { throw 'handoff requires -Owner (or set $env:AGENT_OWNER - normally your pool wrapper does)' }
+  $d = (Get-Location).Path
+  $cfg = $null; $poolCwd = $null
+  for ($i = 0; $i -lt 6 -and $d; $i++) {
+    $cand = [IO.Path]::Combine([IO.Path]::Combine([IO.Path]::Combine($d, '.memory'), '.settings'), ($o + '.json'))
+    if (Test-Path -LiteralPath $cand -PathType Leaf) { $cfg = $cand; $poolCwd = $d; break }
+    $parent = Split-Path $d -Parent
+    if ($parent -eq $d) { break }
+    $d = $parent
+  }
+  if (-not $cfg) {
+    Write-Output ("HANDOFF-REFUSED: no memory settings for '{0}' (.memory\.settings\{0}.json not found upward from {1})." -f $o, (Get-Location).Path)
+    Write-Output "  The role's memory address is unknown, so nothing was collected or computed. Say so in the handoff report"
+    Write-Output "  and work the revision list by hand; the address is written by agent-memory.ps1 when the role is set up."
+    return
+  }
+  $memDir = $null
+  try { $memDir = [string]((Read-Utf8 $cfg | ConvertFrom-Json).autoMemoryDirectory) } catch { }
+  if (-not $memDir -or -not (Test-Path -LiteralPath $memDir -PathType Container)) {
+    Write-Output ("HANDOFF-REFUSED: settings {0} name no existing autoMemoryDirectory (got '{1}')." -f $cfg, $memDir)
+    return
+  }
+  $auditor = Join-Path $PSScriptRoot 'memory-audit.ps1'
+  if (-not (Test-Path $auditor)) { Write-Output "HANDOFF-REFUSED: memory-audit.ps1 is missing next to pool.ps1."; return }
+  & $auditor -Owner $o -Cwd $poolCwd -Dir $memDir -Reason 'handoff' | ForEach-Object { Write-Output $_ }
 }
 
 switch ($Cmd) {
@@ -1085,10 +1476,27 @@ switch ($Cmd) {
   }
   'inbox' { Invoke-Inbox $Owner }
   'mine'  { Invoke-Mine  $Owner }
+  'close' {
+    if (-not $Key) { throw 'close requires -Key <obligation-key>' }
+    # Поля шапки задаём здесь, а не параметрами вызова: Get-ObligationRows читает их через
+    # $script:, и чужие значения (например -About из той же строки) уехали бы в событие молча.
+    $script:Opens = ''; $script:About = ''; $script:Expect = ''; $script:CloseWhen = ''; $script:Amends = ''
+    $script:Closes  = $Key
+    $script:Outcome = if ($Outcome) { $Outcome } else { 'fulfilled' }
+    Invoke-Event $Owner ("closed: " + $Key) 'event' (Get-BodyText)
+  }
+  'amend' {
+    if (-not $Key) { throw 'amend requires -Key <obligation-key>' }
+    if (-not $Expect -and -not $CloseWhen) { throw 'amend requires -Expect and/or -CloseWhen' }
+    $script:Opens = ''; $script:About = ''; $script:Closes = ''; $script:Outcome = ''
+    $script:Amends = $Key
+    Invoke-Event $Owner ("amended: " + $Key) 'event' (Get-BodyText)
+  }
   'claim' { Invoke-Claim $Owner $Id }
   'ack'   { Invoke-Ack   $Owner $Id }
   'dismiss' { Invoke-Dismiss $Owner $Id }
   'ready' { Invoke-Ready $Owner }
+  'handoff' { Invoke-Handoff $Owner }
   'check' { Invoke-Check $Owner }
   'watch' { Invoke-Watch $Owner $IntervalSeconds }
   'monitor' { $iv = if ($PSBoundParameters.ContainsKey('IntervalSeconds')) { $IntervalSeconds } else { 20 }; Invoke-Monitor $Owner $iv }
@@ -1109,5 +1517,5 @@ switch ($Cmd) {
       Invoke-BoardLoop $iv $doNotify
     } else { Invoke-Board }
   }
-  'help'  { Get-Content $PSCommandPath -TotalCount 40 }   # = длина шапки-справки; растёт вместе с ней
+  'help'  { Get-Content $PSCommandPath -TotalCount 52 }   # = длина шапки-справки; растёт вместе с ней
 }

@@ -33,19 +33,19 @@
 
 ```bash
 # форма, события, свод, справка
-python3 <probes-dir>/probe_close.py          # 25 проверок
+python3 ../../scripts/obligations/probes/probe_close.py          # 25 проверок
 # сводка между пулами, включая защиту от тёзок
-python3 <probes-dir>/probe_cross.py          # 18
+python3 ../../scripts/obligations/probes/probe_cross.py          # 18
 # рассылка замечаний: засев, повторы, сухой прогон
-python3 <probes-dir>/probe_notify.py         # 15
+python3 ../../scripts/obligations/probes/probe_notify.py         # 15
 # доказательство, что проверки не пустые
-python3 <probes-dir>/mutate_close.py         # 10 мутаций
+python3 ../../scripts/obligations/probes/mutate_close.py         # 10 мутаций
 # общий тест движка (эталон 90/91, один пропуск на linux)
-pwsh -NoProfile -File <pool-cli-dir>/selftest.ps1 | grep self-test
+pwsh -NoProfile -File ../../scripts/selftest.ps1 | grep self-test
 # кому ушло бы письмо о форме, ничего не отправляя
-python3 <shop-dir>/shop_oblig.py --all --notify-dry
+python3 ../../scripts/obligations/shop_oblig.py --all --notify-dry
 # накопилось ли достаточно писем для замера итогов
-python3 <shop-dir>/rollout_gate.py --check
+python3 ../../scripts/obligations/rollout_gate.py --check
 ```
 
 🛑 **Зелёный прогон сам по себе не доказывает ничего.** Он одинаков и когда правило работает,

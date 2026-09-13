@@ -561,7 +561,7 @@ function Invoke-HeadlessCompact {
     # падает (нет пикера), поэтому резолвим uuid сами. НЕ по метрике (дрейфует), НЕ по launch-uuid.
     # 🛑 ProjectKey из cwd: заменяется ЛЮБОЙ не-алфанумерик, а не перечисленные символы. Прежняя формула
     # `($Cwd -replace '[:\\]','-') -replace '_','-'` не трогала ТОЧКУ, и для пула в скрытом каталоге
-    # давала несуществующий путь: <workspace-root>\.launcher -> «D---workspace-.launcher», тогда как на
+    # давала несуществующий путь: <workspace-root>\.launcher -> «<workspace-root-enc>-.launcher», тогда как на
     # диске «<workspace-key>». Итог — compact молча пропускался с «project-каталог не найден»
     # у КАЖДОЙ роли, чей рабочий каталог содержит точку (у нас это весь пул <organizer-pool>; поймано на
     # боевом гашении 06.08). Движок выводит ключ именно так — заменой всего не-алфанумерика.
@@ -1721,12 +1721,12 @@ function Invoke-SelfTest {
         $fake = [pscustomobject]@{
             slug = 'fake-pool-xyz'; root = 'C:\workspace-root\monorepo\scripts'
             cwd  = 'C:\workspace-root\monorepo'
-            roles = @([pscustomobject]@{ owner = 'tech-lead-div'; bat = 'nope.bat' })
+            roles = @([pscustomobject]@{ owner = 'tech-lead-x'; bat = 'nope.bat' })
         }
         $script:ManifestsCache = @($real, $fake)
         $amb = Get-AmbiguousOwners $real
         $script:ManifestsCache = $null
-        $amb.ContainsKey('tech-lead-div')
+        $amb.ContainsKey('tech-lead-x')
     }
     # --- name-collision guards. Pure functions first, then real (temporary) disk fixtures. ---
     T 'Resolve-PoolBus: windows-путь НЕ идёт в провайдер (на Linux Join-Path бросил бы)' {
@@ -1815,7 +1815,7 @@ function Invoke-SelfTest {
         Test-CompactProc -Proc ([pscustomobject]@{ CommandLine = 'claude.exe --resume 1234abcd-1111-2222 --dangerously-skip-permissions -p "/compact"'; ParentProcessId = 0 }) -ProcMap $null
     }
     T 'Компакт-guard: живая панель (без -p) -> НЕ компакт' {
-        -not (Test-CompactProc -Proc ([pscustomobject]@{ CommandLine = 'claude.exe --resume TL-DivDoc-2 --dangerously-skip-permissions --model claude-opus-5[1m]'; ParentProcessId = 0 }) -ProcMap $null)
+        -not (Test-CompactProc -Proc ([pscustomobject]@{ CommandLine = 'claude.exe --resume TL-ProjectX-2 --dangerously-skip-permissions --model claude-opus-5[1m]'; ParentProcessId = 0 }) -ProcMap $null)
     }
     # Ключевая защита от ЛОЖНОГО срабатывания: стартовый промпт роли лежит в CommandLine целиком,
     # и слово " -p " в его ТЕКСТЕ не должно делать живую панель невидимой для контроллера.
@@ -1823,7 +1823,7 @@ function Invoke-SelfTest {
         -not (Test-CompactProc -Proc ([pscustomobject]@{ CommandLine = 'claude.exe --resume Lead-X "Старт пула. Смотри флаг -p в докере и запусти сборку"'; ParentProcessId = 0 }) -ProcMap $null)
     }
     T 'Компакт-guard: предок poolcompact-*.bat -> это компакт' {
-        $map = @{ 4242 = [pscustomobject]@{ CommandLine = 'cmd.exe /c "C:\Users\X\AppData\Local\Temp\poolcompact-TLDivDoc2.bat"' } }
+        $map = @{ 4242 = [pscustomobject]@{ CommandLine = 'cmd.exe /c "C:\Users\X\AppData\Local\Temp\poolcompact-TLProjectX2.bat"' } }
         Test-CompactProc -Proc ([pscustomobject]@{ CommandLine = 'claude.exe --resume 1234abcd-1111-2222'; ParentProcessId = 4242 }) -ProcMap $map
     }
     T 'Test-CompactLanded ложь на несуществующем транскрипте' { -not (Test-CompactLanded -TranscriptPath 'Z:\nope.jsonl') }
@@ -2395,7 +2395,7 @@ foreach ($t in $targets) {
         # compact = resume по ИМЕНИ (новейшая сессия) -> /compact. Каталог — из МАНИФЕСТА, не из
         # дрейфующего cwd агента (projectDir/resume завязаны на launch-cwd).
         # ProjectKey считается из LAUNCH-CWD, а не из каталога батников: для пулов монорепо каталог
-        # `~\.claude\projects\D---workspace-<monorepo>-scripts` не существует в природе, и компакт
+        # `~\.claude\projects\<workspace-root-enc>-<monorepo>-scripts` не существует в природе, и компакт
         # молча не запускался («project-каталог не найден»). PoolCwd даёт настоящий ключ.
         Write-Step "headless compact (resume-by-name '$($t.Name)', cwd=$($t.PoolCwd))"
         if ($Recharge) {

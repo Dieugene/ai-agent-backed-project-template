@@ -47,7 +47,7 @@
 | Набор | Что берём | Когда он уместен |
 |---|---|---|
 | **Фундамент** | [Windows / PowerShell Pitfalls](docs/windows-powershell-pitfalls.md), [Handling Secrets](docs/handling-secrets.md), [Safety Guards](docs/safety-guards.md) | Почти всегда: это защита от потери работы и утечки секретов, и она ничего не навязывает воркспейсу. |
-| **Одна роль с памятью** | [Agent Long-Term Memory](docs/agent-long-term-memory.md) + [`commands/handoff-myself`](commands/handoff-myself.md) — команда работает и без модуля актуализации (его в репозитории нет, см. примечание в её начале) | Агент один, но его разговор регулярно сжимается и он теряет договорённости. Пул при этом не нужен. |
+| **Одна роль с памятью** | [Agent Long-Term Memory](docs/agent-long-term-memory.md) + [`commands/handoff-myself`](commands/handoff-myself.md) — команда работает и без модуля актуализации (`scripts/memory-revision/` ставится отдельно и не обязателен) | Агент один, но его разговор регулярно сжимается и он теряет договорённости. Пул при этом не нужен. |
 | **Пул из двух-трёх ролей** | [Pool Communication](docs/pool-communication.md) + [Pool Scaffolding](docs/pool-scaffolding.md) + [Board & Watcher](docs/board-and-watcher.md) | У пользователя РЕАЛЬНО работают несколько сессий параллельно и они уже мешают друг другу. Раньше этого шина решает несуществующую проблему. |
 
 Остальное — удалённый мост, консоль в браузере, двухслойный DevOps, контур самовосстановления,
@@ -94,7 +94,7 @@
 
 ### D — Pool Coordination Bus (Координационная шина пула)  *(ядро)*
 Сердце системы: **файловая maildir-шина**, поверх которой N сессий координируются **без человека-диспетчера**. Сообщение — это неизменяемый файл; адрес — это папка. Инвариант доставки держит *инструмент*, а не дисциплина агентов. Поверх шины — **слой осознанных коммуникаций (обязательств)**: прежде чем писать соседу, роль называет, чего ждёт и по какому событию увидит, что дождалась; закрытие — событие, а не письмо; принимает тот, кто ждал. Мишень — не «меньше писем», а длинные рассуждения о малозначимом. Замеры на живой переписке: приёмку ставит ждущий в 72–98 % случаев против 30 % до механики.
-→ [Pool Communication](docs/pool-communication.md) · [Agent Messaging: bus, obligations, feedback](docs/agent-messaging/README.md) · [Message Delivery & Wake-up](docs/message-delivery-and-wakeup.md) · [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) · [Pool Standard Tiers](docs/pool-standard-tiers.md) · [Lessons Learned](docs/lessons-learned.md)
+→ [Pool Communication](docs/pool-communication.md) · [Agent Messaging: bus, obligations, feedback](docs/agent-messaging/README.md) · [Message Delivery & Wake-up](docs/message-delivery-and-wakeup.md) · [`scripts/obligations/`](scripts/obligations/) · [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) · [Pool Standard Tiers](docs/pool-standard-tiers.md) · [Lessons Learned](docs/lessons-learned.md)
 
 ### E — Pool Lifecycle Tooling (Инструменты жизненного цикла пула)
 Развернуть → запустить → наблюдать. Одна команда поднимает bus-native пул; fzf-пикер запускает его в Warp; живой борд и вотчер держат его на виду.
@@ -127,14 +127,14 @@
 
 ### J — Agent Long-Term Memory (Долговременная память агента)
 Что роль знает **после** сжатия контекста и перезапуска. Своя память на роль вместо общей кучи по рабочему каталогу; каталог записей вместо одного растущего handoff-файла; индекс, который движок вклеивает сам, как интерфейс извлечения; впрыск точки входа сразу после сжатия — **потому что провал памяти невидим изнутри**: пересказ выглядит полным, и повода заглянуть в память не возникает. Что именно доезжает в контекст — замерено, а не выведено из документации.
-→ [Agent Long-Term Memory](docs/agent-long-term-memory.md) · [Memory Actualization](docs/memory-actualization.md) · [`commands/handoff-myself`](commands/handoff-myself.md) · [`commands/memory-teardown`](commands/memory-teardown.md)
+→ [Agent Long-Term Memory](docs/agent-long-term-memory.md) · [Memory Actualization](docs/memory-actualization.md) · [`commands/handoff-myself`](commands/handoff-myself.md) · [`commands/memory-teardown`](commands/memory-teardown.md) · [`scripts/memory-revision/`](scripts/memory-revision/)
 
 ### Каталоги верхнего уровня
 
 | Каталог | Что содержит |
 |-----------|---------------|
 | [`docs/`](docs/) | База знаний — 10 блоков выше. Начните с [`docs/README.md`](docs/README.md). |
-| [`scripts/`](scripts/) | Обезличенный референсный PowerShell: ядро шины `pool.ps1` и его **приёмочный самотест** `selftest.ps1`, скаффолдеры `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, лаунчер/пульт `launch-pool.ps1`, контроллер завершения `pool-shutdown.ps1`, защитные механизмы `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, инжектор канона `ref.ps1`, **память ролей** `agent-memory.ps1` с аудитом, впрыском, проверками и доской, борд/нотификатор и шаблоны. |
+| [`scripts/`](scripts/) | Обезличенный референсный PowerShell: ядро шины `pool.ps1` и его **приёмочный самотест** `selftest.ps1`, скаффолдеры `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, лаунчер/пульт `launch-pool.ps1`, контроллер завершения `pool-shutdown.ps1`, защитные механизмы `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, инжектор канона `ref.ps1`, **память ролей** `agent-memory.ps1` с аудитом, впрыском, проверками и доской, борд/нотификатор и шаблоны.; **слой обязательств** [`scripts/obligations/`](scripts/obligations/) (обходчик, антифлуд, замеры, пробы) и **модуль актуализации памяти** [`scripts/memory-revision/`](scripts/memory-revision/) (сборщик списка, помощник-вердиктчик, закрыватель, подсадные) |
 | [`commands/`](commands/) | Переиспользуемые slash-команды Claude Code (шаблоны промптов для `~/.claude/commands/`): [`handoff-myself`](commands/handoff-myself.md) — точечная сверка долговременной памяти роли в конце сессии; [`memory-teardown`](commands/memory-teardown.md) — полная пересборка памяти на свежую голову. |
 | [`lean-skills/`](lean-skills/) | Рабочий минимум скилов: четыре вместо большого пакета, ставятся как личные скилы, **без плагина и без единого хука**. Внутри — замер фактического использования, на котором построен отбор. |
 | [`remote-bridge/`](remote-bridge/) | Telegram-«пульт» — рабочий движок моста на long-polling плюс руководство «подключи своего бота». Секреты живут вне репозитория. |
@@ -221,4 +221,4 @@
 
 ## Обезличивание
 
-Всё здесь — референс, а не готовый к запуску пакет. **Все идентификаторы — плейсхолдеры**: `<workspace-root>`, `<user-home>`, `<pool-name>`, `<role>-<scope>`, `<vps-ip>`; в документах про обмен сообщениями и память — `pool-A`, `pool-B`, `pool-B-1`, `pool-B-2`, `pool-stand` (имена пулов), `<pool-cli-dir>`, `<shop-dir>`, `<probes-dir>` (каталоги обвязки); `.launcher` в путях — имя папки супервайзора исходного воркспейса. Никаких реальных хостов, путей, имён подпроектов или секретов. Если после разбора причин решили взять скрипт — замените в нём `<workspace-root>` на свой фактический путь (см. [`scripts/README.md`](scripts/README.md)). Примеры, взятые из живой практики, помечены как таковые.
+Всё здесь — референс, а не готовый к запуску пакет. **Все идентификаторы — плейсхолдеры**: `<workspace-root>`, `<user-home>`, `<pool-name>`, `<role>-<scope>`, `<vps-ip>`; в документах про обмен сообщениями и память — `pool-A`, `pool-B`, `pool-B-1`, `pool-B-2`, `pool-stand`, `pool-B-3`…`pool-B-6`, `pool-X`, `pool-Y` (имена пулов), `<supervisor-role>`, `<user>`, `<owner>` (роль, пользователь ОС, владелец), `<pool-cli-dir>`, `<shop-dir>`, `<probes-dir>` (каталоги обвязки); `.launcher` в путях — имя папки супервайзора исходного воркспейса. Никаких реальных хостов, путей, имён подпроектов или секретов. Если после разбора причин решили взять скрипт — замените в нём `<workspace-root>` на свой фактический путь (см. [`scripts/README.md`](scripts/README.md)). Примеры, взятые из живой практики, помечены как таковые.

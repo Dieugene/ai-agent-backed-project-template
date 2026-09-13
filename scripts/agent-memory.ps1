@@ -12,7 +12,7 @@
 #   Get-AgentMemoryArgs [-Owner <name>] [-Cwd <path>] [-Quiet]
 #     -> @('--settings', '<file>')   owner set   : role-private memory
 #     -> @()                         owner empty : plain session, engine default (contract of
-#                                                  <umbrella>\scripts\launch-claude.ps1 - do not break it)
+#                                                  <monorepo-2>\scripts\launch-claude.ps1 - do not break it)
 #     -> throws                      owner set but unusable, or directory cannot be created
 #
 # WHY A SETTINGS FILE AND NOT A JSON STRING
@@ -79,7 +79,7 @@ function Initialize-AgentMemoryRepo {
 # Join-Path с пустым Path БРОСАЕТ - и падал бы сам дот-сорс, то есть роль вообще не стартовала бы.
 # Строка выполняется на верхнем уровне, вне try. Зашитая константа так упасть не могла.
 $script:AgentMemoryGlobalFlag = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'agent-memory.enabled' }
-                               else { 'C:\workspace-root\.launcher\pool-bus\agent-memory.enabled' }
+                               else { '<workspace-root>\.launcher\pool-bus\agent-memory.enabled' }
 
 function Test-AgentMemoryEnabled {
     param([string]$Cwd = (Get-Location).Path)
@@ -109,9 +109,9 @@ function Register-AgentMemoryBusCwd {
     #
     # WHY: the task board (pool.ps1) knows ONLY the bus path, while the memory store is derived from
     # the cwd the wrapper sets with `cd /d`. For split pools these are DIFFERENT directories - the
-    # div-doc / auditors / agentic buses live in <monorepo>\01_projects\<project>\.bus while
-    # their cwd is <workspace-root>\<monorepo>; search / team buses live under <umbrella>\<project>
-    # while their cwd is <workspace-root>\<umbrella>. Deriving cwd from the bus path would miss the
+    # <project-1> / <project-2> buses live in <monorepo>\01_projects\<project>\.bus while
+    # their cwd is <workspace-root>\<monorepo>; <project-3> / <project-4> buses live under <monorepo-2>\<project>
+    # while their cwd is <workspace-root>\assistants. Deriving cwd from the bus path would miss the
     # store for 5 pools out of 17 (21 roles) - and miss it SILENTLY, which is the exact failure class
     # this module is built to avoid. Here both values are known for certain, so we record it once at
     # launch and the board reads it back instead of guessing.
@@ -275,9 +275,13 @@ function Get-AgentMemoryArgs {
     try { $v = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue; if ($v) { $onWin = [bool]$v.Value } } catch { }
     $psExe  = if ($onWin) { 'powershell' } else { try { [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName } catch { 'pwsh' } }
     $psFlag = if ($onWin) { '-NoProfile -ExecutionPolicy Bypass' } else { '-NoProfile' }
+    # -Dir несёт ТОЧНЫЙ адрес хранилища ($p.RoleDir - он известен ровно здесь, в момент записи хука):
+    # без него скрипты восстанавливали адрес подъёмом по дереву от cwd, а подъём берёт первого тёзку
+    # (.memory/<owner> есть у четырёх lead в разных пулах) и расходится с настройками там, где шина и
+    # память лежат в разных каталогах (qa-div: родитель шины держит ПУСТОЙ .memory/qa-div). Оппонент 18.08.
     $auditCmd = ('{0} {1} -File ' -f $psExe, $psFlag) +
                 ('"{0}" ' -f (Join-Path $PSScriptRoot 'memory-audit.ps1')) +
-                ('-Owner "{0}" -Cwd "{1}" -Reason precompact' -f $Owner, $Cwd)
+                ('-Owner "{0}" -Cwd "{1}" -Dir "{2}" -Reason precompact' -f $Owner, $Cwd, $p.RoleDir)
     # SessionStart с matcher `compact` возвращает роли точку входа в память СРАЗУ ПОСЛЕ сжатия.
     # Почему именно так, а не инструкцией: сжатие уносит из контекста всё прочитанное, оглавление
     # движок вклеивает заново, но тела записей - нет, и роль в них не идёт: пересказ выглядит полным.
@@ -286,7 +290,7 @@ function Get-AgentMemoryArgs {
     # так получает стартовый промпт и `pool mine`, там впрыск был бы двойной оплатой.
     $injectCmd = ('{0} {1} -File ' -f $psExe, $psFlag) +
                  ('"{0}" ' -f (Join-Path $PSScriptRoot 'memory-inject.ps1')) +
-                 ('-Owner "{0}" -Cwd "{1}"' -f $Owner, $Cwd)
+                 ('-Owner "{0}" -Cwd "{1}" -Dir "{2}"' -f $Owner, $Cwd, $p.RoleDir)
     $payload = [ordered]@{
         autoMemoryDirectory = $p.RoleDir
         hooks = [ordered]@{
@@ -315,12 +319,14 @@ function Get-AgentMemoryArgs {
         $hookCmd = $null
         try { $hookCmd = $check.hooks.PreCompact[0].hooks[0].command } catch { $hookCmd = $null }
         if (-not $hookCmd -or $hookCmd -notlike '*memory-audit.ps1*') { throw 'PreCompact audit hook did not survive serialization' }
+        if ($hookCmd -notlike '*-Dir *') { throw 'PreCompact audit hook lost the -Dir store address' }
         # Тот же контроль для второго хука: уплощение бьёт по вложенности, а он лежит на уровень глубже
         # (matcher + hooks), то есть рискует ровно так же. Проверяем и matcher - без него хук стрелял бы
         # на каждом старте, а не только после сжатия.
         $injCmd = $null; $injMatch = $null
         try { $injCmd = $check.hooks.SessionStart[0].hooks[0].command; $injMatch = $check.hooks.SessionStart[0].matcher } catch { $injCmd = $null }
         if (-not $injCmd -or $injCmd -notlike '*memory-inject.ps1*') { throw 'SessionStart inject hook did not survive serialization' }
+        if ($injCmd -notlike '*-Dir *') { throw 'SessionStart inject hook lost the -Dir store address' }
         if ($injMatch -ne 'compact') { throw 'SessionStart matcher did not survive serialization' }
     } catch {
         throw "[agent-memory] settings file '$($p.SettingsFile)' did not read back as valid JSON ($($_.Exception.Message)). Refusing to start: the engine would ignore it silently and use shared memory."

@@ -48,7 +48,7 @@ attention. Reasonable starter sets:
 | Set | What to take | When it fits |
 |---|---|---|
 | **Foundation** | [Windows / PowerShell Pitfalls](docs/windows-powershell-pitfalls.md), [Handling Secrets](docs/handling-secrets.md), [Safety Guards](docs/safety-guards.md) | Almost always: it protects against lost work and leaked secrets and imposes nothing on the workspace. |
-| **One role with memory** | [Agent Long-Term Memory](docs/agent-long-term-memory.md) + [`commands/handoff-myself`](commands/handoff-myself.md) (Russian; works without the actualization module, which this repo does not ship — see the note at its top) | A single agent whose conversation is compacted regularly and who keeps losing agreements. No pool needed. |
+| **One role with memory** | [Agent Long-Term Memory](docs/agent-long-term-memory.md) + [`commands/handoff-myself`](commands/handoff-myself.md) (Russian; works without the actualization module — `scripts/memory-revision/` is a separate, optional install) | A single agent whose conversation is compacted regularly and who keeps losing agreements. No pool needed. |
 | **A pool of two or three roles** | [Pool Communication](docs/pool-communication.md) + [Pool Scaffolding](docs/pool-scaffolding.md) + [Board & Watcher](docs/board-and-watcher.md) | The user REALLY runs several sessions in parallel and they already get in each other's way. Before that point the bus solves a problem that doesn't exist. |
 
 Everything else — the remote bridge, the browser console, two-layer DevOps, the self-healing
@@ -96,7 +96,7 @@ The container for everything: monorepo variants A/B, plain vs. pool mode, worksp
 
 ### D — Pool Coordination Bus  *(the core)*
 The heart of the system: a **file-based maildir bus** over which N sessions coordinate with **no human dispatcher**. A message is an immutable file; an address is a folder. The delivery invariant is held by the *tool*, not by agent discipline. On top of the bus sits a **layer of deliberate communication (obligations)**: before writing to a peer, a role names what it expects and by which event it will see it is done; closing is an event, not a letter; the waiting side accepts. The target is not "fewer letters" but long reasoning about trivia. Measured on live traffic: acceptance by the waiting side in 72–98 % of cases, against 30 % before the mechanism.
-→ [Pool Communication](docs/pool-communication.md) · [Agent Messaging: bus, obligations, feedback](docs/agent-messaging/README.md) (Russian) · [Message Delivery & Wake-up](docs/message-delivery-and-wakeup.md) (Russian) · [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) · [Pool Standard Tiers](docs/pool-standard-tiers.md) · [Lessons Learned](docs/lessons-learned.md)
+→ [Pool Communication](docs/pool-communication.md) · [Agent Messaging: bus, obligations, feedback](docs/agent-messaging/README.md) (Russian) · [Message Delivery & Wake-up](docs/message-delivery-and-wakeup.md) (Russian) · [`scripts/obligations/`](scripts/obligations/) · [Wrapper & Hook Scripts](docs/wrapper-and-hook-scripts.md) · [Pool Standard Tiers](docs/pool-standard-tiers.md) · [Lessons Learned](docs/lessons-learned.md)
 
 ### E — Pool Lifecycle Tooling
 Scaffold → launch → observe. One command stands up a bus-native pool; an fzf picker launches it into Warp; a live board and watcher keep it visible.
@@ -124,14 +124,14 @@ The other half of the lifecycle after *launch & observe* (E): winding a pool dow
 
 ### J — Agent Long-Term Memory
 What a role still knows **after** a context compaction and a restart. A private store per role instead of one shared pile keyed by working directory; a directory of entries instead of a single growing handoff file; the index the engine injects on its own, used as the retrieval interface; and an entry point re-injected right after compaction — **because a memory failure is invisible from the inside**: the summary looks complete, so nothing prompts the agent to open its memory. What actually reaches the context was measured, not inferred from the docs.
-→ [Agent Long-Term Memory](docs/agent-long-term-memory.md) · [Memory Actualization](docs/memory-actualization.md) (Russian) · [`commands/handoff-myself`](commands/handoff-myself.md) · [`commands/memory-teardown`](commands/memory-teardown.md)
+→ [Agent Long-Term Memory](docs/agent-long-term-memory.md) · [Memory Actualization](docs/memory-actualization.md) (Russian) · [`commands/handoff-myself`](commands/handoff-myself.md) · [`commands/memory-teardown`](commands/memory-teardown.md) · [`scripts/memory-revision/`](scripts/memory-revision/)
 
 ### Top-level directories
 
 | Directory | What it holds |
 |-----------|---------------|
 | [`docs/`](docs/) | The knowledge base — the 10 blocks above. Start at [`docs/README.md`](docs/README.md). |
-| [`scripts/`](scripts/) | Anonymized reference PowerShell: the bus core `pool.ps1`, scaffolders `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, launcher/pult `launch-pool.ps1`, shutdown controller `pool-shutdown.ps1`, guards `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, canon-injector `ref.ps1`, board/notifier, and templates. |
+| [`scripts/`](scripts/) | Anonymized reference PowerShell: the bus core `pool.ps1`, scaffolders `new-pool.ps1` / `add-peer.ps1` / `fresh-session.ps1`, launcher/pult `launch-pool.ps1`, shutdown controller `pool-shutdown.ps1`, guards `block-dangerous-rm.ps1` / `warn-process-kill.ps1` / `stop-detect-malformed.ps1`, canon-injector `ref.ps1`, board/notifier, and templates.; the **obligations layer** [`scripts/obligations/`](scripts/obligations/) (walker, antiflood, measurements, probes) and the **memory actualization module** [`scripts/memory-revision/`](scripts/memory-revision/) (list builder, verdict helper, closer, planted positions) |
 | [`commands/`](commands/) | Reusable Claude Code slash-commands (prompt templates for `~/.claude/commands/`): [`handoff-myself`](commands/handoff-myself.md) — the role's end-of-session long-term-memory reconciliation pass; [`memory-teardown`](commands/memory-teardown.md) — a full rebuild of the memory on a fresh head. |
 | [`lean-skills/`](lean-skills/) | A lean skill set: four skills instead of a large bundle, installed as personal skills — **no plugin, no hooks**. Includes the usage measurement the selection is based on. |
 | [`remote-bridge/`](remote-bridge/) | The Telegram "pult" — a working long-polling bridge engine plus a "connect your own bot" guide. Secrets live outside the repo. |
@@ -218,4 +218,4 @@ Every workspace and subproject follows the same numbered layout. This is the sho
 
 ## Anonymization
 
-Everything here is a reference, not a run-out-of-the-box package. **All identifiers are placeholders** — `<workspace-root>`, `<user-home>`, `<pool-name>`, `<role>-<scope>`, `<vps-ip>`; in the messaging and memory docs also `pool-A`, `pool-B`, `pool-B-1`, `pool-B-2`, `pool-stand` (pool names) and `<pool-cli-dir>`, `<shop-dir>`, `<probes-dir>` (tooling directories); `.launcher` in paths is the name of the source workspace's supervisor folder. No real hosts, paths, subproject names, or secrets. If, after understanding the reasons, you decide to take a script, replace `<workspace-root>` in it with your actual path (see [`scripts/README.md`](scripts/README.md)). Examples drawn from live practice are labeled as such.
+Everything here is a reference, not a run-out-of-the-box package. **All identifiers are placeholders** — `<workspace-root>`, `<user-home>`, `<pool-name>`, `<role>-<scope>`, `<vps-ip>`; in the messaging and memory docs also `pool-A`, `pool-B`, `pool-B-1`, `pool-B-2`, `pool-stand`, `pool-B-3`…`pool-B-6`, `pool-X`, `pool-Y` (pool names), `<supervisor-role>`, `<user>`, `<owner>` (role, OS user, owner) and `<pool-cli-dir>`, `<shop-dir>`, `<probes-dir>` (tooling directories); `.launcher` in paths is the name of the source workspace's supervisor folder. No real hosts, paths, subproject names, or secrets. If, after understanding the reasons, you decide to take a script, replace `<workspace-root>` in it with your actual path (see [`scripts/README.md`](scripts/README.md)). Examples drawn from live practice are labeled as such.

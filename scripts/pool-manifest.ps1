@@ -89,7 +89,7 @@ function Test-SamePath {
 
 <# `set AGENT_OWNER=<роль>` из wrapper-батника — КЛЮЧ роли. Именно он, а не имя файла: fresh-session.ps1
    клонирует обёртку под новым именем (`claude-<owner>-2.bat`), сохраняя владельца, и в одном каталоге
-   уживаются `claude-div-dev.bat` и `claude-div-dev-internal.bat` — сравнение имён путает такие пары. #>
+   уживаются `claude-x-dev.bat` и `claude-x-dev-internal.bat` — сравнение имён путает такие пары. #>
 function Get-BatOwner {
     param([string]$BatPath)
     if (-not $BatPath -or -not (Test-Path $BatPath)) { return $null }

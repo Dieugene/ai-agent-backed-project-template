@@ -11,6 +11,20 @@
 # Контракт: печатает либо тело якорной записи, либо список открытых задач, либо НИЧЕГО.
 # Любая ошибка = тишина и код 0: сорванный хук не должен мешать сессии жить.
 #
+# Второй режим — ЗАМЕР (`-Measure`, обычно с `-Dir`): вместо записи печатается ОДНА машинная строка:
+#   ANCHOR: by=name|index chars=<N> limit=<L> delivered=<P> file=<имя>   (by=name - якорь по имени,
+#         by=index - запасной проход: первая task_-ссылка оглавления; file последним, в имени бывают пробелы)
+#   ANCHOR: empty file=<имя>     - якорь есть, но тело пустое (впрыснется список задач)
+#   ANCHOR: none                 - ни якоря по имени, ни task_-ссылки в оглавлении (впрыснется список задач)
+#   ANCHOR: off (.noinject)      - впрыск выключен нарочно
+#   ANCHOR: error <текст>        - замер не состоялся (нет каталога, ошибка чтения); молчащий измеритель
+#                                  неотличим от «якоря нет», поэтому в этом режиме беда говорит вслух
+# Его зовёт структурная проверка (`memory-check.ps1`) и хук шины (`pool.ps1 hook`), и намеренно ТЕМ ЖЕ
+# скриптом, а не своим счётом: замер обязан идти тем же путём, что и настоящий впрыск (тот же выбор файла,
+# та же срезка шапки, тот же предел), иначе проверка и хук разойдутся молча. Повод: 17.08.2026 якорь
+# ведущего вырос до 39 000 знаков при пределе 4000, роль после каждого сжатия получала 10 % — начало и
+# старый хвост, а свежее состояние проваливалось в вырезанную середину; заметить это было нечем.
+#
 # Кодировка: файл с BOM (PS 5.1 иначе прочтёт кириллицу как cp1251), вывод принудительно UTF-8 —
 # stdout хука уходит В КОНТЕКСТ МОДЕЛИ, и мохибаке там был бы виден на каждом сжатии.
 
@@ -18,16 +32,18 @@
 param(
     [string]$Owner = $env:AGENT_OWNER,
     [string]$Cwd   = $PWD.Path,
-    [int]$Limit    = 4000   # p75 фактического распределения тел task_*.md (59 записей): 73% едут целиком
+    [string]$Dir,            # каталог памяти напрямую (проверка/замер); задан - поиск по Owner+Cwd не нужен
+    [switch]$Measure,        # печатать замер якоря вместо записи (см. шапку)
+    [int]$Limit    = 8000   # слово владельца 18.08.2026: «установи лимит на якорь… на 8000 знаков» (было 4000 = p75 распределения тел task_*.md)
 )
 
 $ErrorActionPreference = 'Stop'
-try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+# UTF8Encoding($false): [Text.Encoding]::UTF8 несёт преамбулу, и под PS 5.1 при перенаправленном stdout три
+# байта BOM уезжали в контекст модели перед «===» (замер компаньона на сервере).
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
 
-# Хук обязан быть тихим при любой беде: стартующая сессия важнее подсказки.
-trap { exit 0 }
-
-if ([string]::IsNullOrWhiteSpace($Owner)) { exit 0 }
+# Хук обязан быть тихим при любой беде: стартующая сессия важнее подсказки. Замер, наоборот, о беде говорит.
+trap { if ($Measure) { Write-Output ("ANCHOR: error " + $_.Exception.Message) }; exit 0 }
 
 # Каталог памяти ищем вверх от cwd - роль могла уйти вглубь проекта (тот же приём, что в memory-audit).
 function Find-MemoryDir([string]$start, [string]$owner) {
@@ -42,31 +58,56 @@ function Find-MemoryDir([string]$start, [string]$owner) {
     return $null
 }
 
-$dir = Find-MemoryDir $Cwd $Owner
-if (-not $dir) { exit 0 }
+# Внутреннее имя нарочно НЕ $dir: в PowerShell $Dir и $dir - одна переменная (регистр не различается),
+# и присваивание "переменной" молча переписывало бы параметр.
+$memDir = $null
+if ($Dir) {
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { if ($Measure) { Write-Output "ANCHOR: error no such dir $Dir" }; exit 0 }
+    $memDir = $Dir
+} else {
+    if ([string]::IsNullOrWhiteSpace($Owner)) { if ($Measure) { Write-Output 'ANCHOR: error no owner' }; exit 0 }
+    $memDir = Find-MemoryDir $Cwd $Owner
+    if (-not $memDir) { if ($Measure) { Write-Output "ANCHOR: error no memory dir for $Owner under $Cwd" }; exit 0 }
+}
 
 # Ручной выключатель на роль: якорь распух или мешает - положить файл, не трогая код.
-if (Test-Path -LiteralPath ([IO.Path]::Combine($dir, '.noinject'))) { exit 0 }
-
-$index = [IO.Path]::Combine($dir, 'MEMORY.md')
-if (-not (Test-Path -LiteralPath $index -PathType Leaf)) { exit 0 }
+# Выключатель обязан быть виден В МОМЕНТ действия: раньше боевой путь молчал, и роль после сжатия
+# просто не получала точку входа, не зная, что это нарочно (класс «механика молчит, где должна
+# кричать» - приёмка 17.08). Одна строка в контекст: роль сама и включала выключатель.
+if (Test-Path -LiteralPath ([IO.Path]::Combine($memDir, '.noinject'))) {
+    if ($Measure) { Write-Output 'ANCHOR: off (.noinject)' }
+    else { Write-Output '=== ПАМЯТЬ РОЛИ: впрыск точки входа ВЫКЛЮЧЕН файлом .noinject - после сжатия открой память сам ===' }
+    exit 0
+}
 
 # --- поиск якоря -------------------------------------------------------------
 # Два прохода, и порядок важен. Сначала якорь ПО ИМЕНИ - позиция в оглавлении ненадёжна: роль
 # дописывает строки сверху, и «первая ссылка» уезжает на свежую задачу (поймано на компаньоне:
 # вместо якоря печаталась текущая работа). Имя задано соглашением в команде сверки памяти.
-$anchor = $null
-$byName = [IO.Path]::Combine($dir, 'task_session_state.md')
-if (Test-Path -LiteralPath $byName -PathType Leaf) { $anchor = $byName }
+# Оглавление для ЭТОГО прохода не нужно вовсе - раньше отсутствие MEMORY.md обрывало впрыск до поиска
+# якоря (стенд компаньона: якорь на месте, индекса нет -> тишина); а движок пересоздаёт индекс, и
+# SessionStart:compact может попасть в это окно. Имена сверяем без учёта регистра: на Linux
+# `Test-Path` по точному имени и `-Filter task_*.md` регистрозависимы, и переехавшая с Windows память
+# с `Task_Session_State.md` теряла оба прохода.
+$files = @(Get-ChildItem -LiteralPath $memDir -File -ErrorAction SilentlyContinue)
+$anchor = $null; $byName = $null
+foreach ($f in $files) { if ($f.Name -ieq 'task_session_state.md') { $byName = $f.FullName; break } }
+if ($byName) { $anchor = $byName }
 
 # Запасной проход: якоря по имени нет - берём первую ссылку на task_ в оглавлении. Это не якорь, но
 # ближе к нему, чем ничего, и работает до того, как соглашение доедет до роли.
-if (-not $anchor) {
+$index = [IO.Path]::Combine($memDir, 'MEMORY.md')
+if (-not $anchor -and (Test-Path -LiteralPath $index -PathType Leaf)) {
 foreach ($line in [IO.File]::ReadAllLines($index)) {
-    $m = [regex]::Match($line, '\]\((task_[^)]+\.md)\)')
+    $m = [regex]::Match($line, '\]\(([Tt][Aa][Ss][Kk]_[^)]+\.[Mm][Dd])\)')
     if ($m.Success) {
-        $cand = [IO.Path]::Combine($dir, $m.Groups[1].Value)
-        if (Test-Path -LiteralPath $cand -PathType Leaf) { $anchor = $cand; break }
+        # Обратный слэш нормализуем: GetFileName на Unix понимает только '/'. Дыра УЗКАЯ - образец выше
+        # требует `task_` сразу после `](`, поэтому сюда доходит лишь форма `](task_*\*.md)`; ссылка
+        # `](sub\task_x.md)` не берётся образцом вовсе (память роли плоская, подкаталоги вне конвенции).
+        # На Windows GetFileName понимает оба слэша - мутацию красным покажет только Linux.
+        $want = [IO.Path]::GetFileName(($m.Groups[1].Value -replace '\\', '/'))
+        foreach ($f in $files) { if ($f.Name -ieq $want) { $anchor = $f.FullName; break } }
+        if ($anchor) { break }
     }
 }
 }
@@ -74,9 +115,29 @@ foreach ($line in [IO.File]::ReadAllLines($index)) {
 if ($anchor) {
     $text = [IO.File]::ReadAllText($anchor).Trim()
     # Шапку с метаданными выбрасываем: в контексте она не работает, а место занимает.
-    $text = [regex]::Replace($text, '(?s)^---.*?\r?\n---\r?\n', '')
+    # Закрывающие `---` бывают последней строкой файла (пустое тело) - образец допускает конец текста,
+    # иначе шапка ехала в контекст как содержание и считалась замером (стенд компаньона: chars=51,
+    # delivered=100).
+    $text = [regex]::Replace($text, '(?s)^---\r?\n.*?\r?\n---(\r?\n|$)', '')
     $text = $text.Trim()
     $name = [IO.Path]::GetFileName($anchor)
+    $by = if ($anchor -eq $byName) { 'name' } else { 'index' }
+    if ($text.Length -eq 0) {
+        # Пустое тело - отдельный исход, а не «в норме»: точки входа нет, а рапорт «100 %» врал бы.
+        if ($Measure) { Write-Output ("ANCHOR: empty file={0}" -f $name); exit 0 }
+        $anchor = $null   # дальше - как без якоря: список открытых задач
+    }
+}
+
+if ($anchor) {
+    # Доля, которая доедет: при переполнении печатается ровно $Limit знаков записи (голова + хвост).
+    # Floor, а не Round: 4001 знак - это уже обрезка, и «100 %» рядом со словами «середина вырезана» врал бы.
+    $pct = if ($text.Length -gt $Limit -and $text.Length -gt 0) { [int][Math]::Floor(100.0 * $Limit / $text.Length) } else { 100 }
+
+    if ($Measure) {
+        Write-Output ("ANCHOR: by={0} chars={1} limit={2} delivered={3} file={4}" -f $by, $text.Length, $Limit, $pct, $name)
+        exit 0
+    }
 
     if ($text.Length -gt $Limit) {
         # Режем СЕРЕДИНУ, а не хвост: в начале записи «что это», в конце - состояние и следующий шаг.
@@ -85,27 +146,45 @@ if ($anchor) {
         # знаков оказывалась больше самого предела, Substring падал с отрицательной длиной, и хук
         # молча не печатал ничего - тихий отказ вместо обрезки.
         $head = [Math]::Max(200, [int]($Limit / 4))
+        if ($head -ge $Limit) { $head = [Math]::Max(1, [int]($Limit / 2)) }   # предел меньше 200 - делим пополам, а не уходим в отрицательную длину
         $tailLen = $Limit - $head
+        $total = $text.Length
         $head = $text.Substring(0, $head)
         $tail = $text.Substring($text.Length - $tailLen)
-        $text = $head + "`n`n[... середина опущена, запись целиком: " + $anchor + " ...]`n`n" + $tail
+        # Маркер обрезки - ЕДИНСТВЕННОЕ, что роль читает гарантированно (вывод PreCompact-аудита в контекст
+        # не попадает), поэтому он несёт и числа, и действие, а не только «середина опущена».
+        $text = $head + "`n`n[... СЕРЕДИНА ВЫРЕЗАНА: якорь " + $total + " знаков, в контекст вклеено " + $Limit +
+                " (" + $pct + " %). Целиком: " + $anchor + ". До следующего сжатия перепиши его как СОСТОЯНИЕ короче " +
+                $Limit + " знаков (где остановился / следующий шаг / условия / открытые вопросы); сделанное и датированное - " +
+                "в предметные записи, историю помнит git ...]`n`n" + $tail
     }
 
-    Write-Output "=== ПАМЯТЬ РОЛИ: точка входа после сжатия контекста ($name) ==="
+    # Запасной проход обязан НАЗЫВАТЬСЯ запасным в том, что видит роль: заголовок один и тот же, и роль,
+    # получившая вместо якоря первую подвернувшуюся задачу, иначе не узнает об этом никогда (живой случай:
+    # `planner` pool-A, якорь шестой строкой, впрыскивалась рабочая задача).
+    if ($by -eq 'name') {
+        Write-Output "=== ПАМЯТЬ РОЛИ: точка входа после сжатия контекста ($name) ==="
+    } else {
+        Write-Output "=== ПАМЯТЬ РОЛИ: якоря task_session_state.md НЕТ - подставлена первая task_-ссылка оглавления ($name); это может быть не точка входа, а просто задача ==="
+    }
     Write-Output $text
     Write-Output "=== конец записи. Остальное - по строкам оглавления MEMORY.md, тела в контекст не попадают ==="
     exit 0
 }
 
+if ($Measure) { Write-Output 'ANCHOR: none'; exit 0 }
+
 # --- якоря нет: отдаём то, что есть ------------------------------------------
 # Так хук полезен и до того, как соглашение о якоре доедет до роли: список открытых задач она иначе
 # восстанавливает из оглавления вручную, а после сжатия - не восстанавливает вовсе.
-$tasks = @(Get-ChildItem -LiteralPath $dir -Filter 'task_*.md' -File -ErrorAction SilentlyContinue |
+$tasks = @(Get-ChildItem -LiteralPath $memDir -Filter 'task_*.md' -File -ErrorAction SilentlyContinue |
            Sort-Object LastWriteTime -Descending | Select-Object -First 8)
 if ($tasks.Count -eq 0) { exit 0 }
 
 Write-Output "=== ПАМЯТЬ РОЛИ: якорной записи нет, вот открытые задачи ==="
 Write-Output "Контекст только что сжали. Тела записей в него НЕ попадают - открой нужные сам:"
 foreach ($t in $tasks) { Write-Output ("  " + $t.FullName) }
-Write-Output "Заведи якорь `task_session_state.md` (где остановился / следующий шаг / условия) и поставь его строку ПЕРВОЙ в MEMORY.md."
+# Одинарные кавычки: в двойных обратный апостроф - escape, и `t превращался в табуляцию («ask_session_state.md»;
+# нашёл компаньон прогоном ветки пустого якоря).
+Write-Output 'Заведи якорь task_session_state.md (где остановился / следующий шаг / условия) и поставь его строку ПЕРВОЙ в MEMORY.md.'
 exit 0

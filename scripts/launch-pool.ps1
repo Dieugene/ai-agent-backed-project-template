@@ -318,10 +318,10 @@ if ($SelfTest) {
   # сравнение имён файлов дало бы «не жива» и разрешило дубль. Ключ — AGENT_OWNER.
   $paneFresh = [pscustomobject]@{ Owner='lead'; Bat='D:\a\claude-lead-2.bat'; Bus='D:\a\.bus'; ProcId=2 }
   TGuard 'клон fresh-session той же роли — жива' (Test-PoolRoleLive $mA $mA.roles[0] @($paneFresh))
-  # В одном каталоге живут claude-div-dev.bat и claude-div-dev-internal.bat (<monorepo>) —
+  # В одном каталоге живут claude-x-dev.bat и claude-x-dev-internal.bat (<monorepo>) —
   # похожие имена НЕ должны склеиваться, иначе роль молча не поднимется.
-  $paneNear = [pscustomobject]@{ Owner='div-dev-internal'; Bat='D:\a\claude-div-dev-internal.bat'; Bus='D:\a\.bus'; ProcId=3 }
-  $mDev = [pscustomobject]@{ slug='d'; root='D:\a'; bus='D:\a\.bus'; roles=@([pscustomobject]@{ owner='div-dev'; bat='claude-div-dev.bat' }) }
+  $paneNear = [pscustomobject]@{ Owner='x-dev-internal'; Bat='D:\a\claude-x-dev-internal.bat'; Bus='D:\a\.bus'; ProcId=3 }
+  $mDev = [pscustomobject]@{ slug='d'; root='D:\a'; bus='D:\a\.bus'; roles=@([pscustomobject]@{ owner='x-dev'; bat='claude-x-dev.bat' }) }
   TGuard 'сосед с похожим именем — не жива' (-not (Test-PoolRoleLive $mDev $mDev.roles[0] @($paneNear)))
   # Control-запись (DevOps): шины нет ни у пула, ни у обёртки — сопоставление по нормализованному пути.
   $mCtl  = [pscustomobject]@{ slug='c'; root='C:\workspace-root'; roles=@([pscustomobject]@{ owner='devops-orchestrator'; bat='devops-orchestrator-2.bat' }) }

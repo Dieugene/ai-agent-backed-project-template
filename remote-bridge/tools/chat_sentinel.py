@@ -11,7 +11,7 @@
 
 Взводится ТОЛЬКО из сессии-цели, фоновой Bash-задачей (run_in_background):
 
-    python D:\\_workspace\\.launcher\\pool-bus\\remote-bridge\\tools\\chat_sentinel.py
+    python <workspace-root>\\.launcher\\pool-bus\\remote-bridge\\tools\\chat_sentinel.py
 
 Срабатывание: печатает СЧЁТЧИК новых записей (контент в вывод не попадает никогда)
 и завершается — завершение фоновой задачи будит сессию. После пробуждения:

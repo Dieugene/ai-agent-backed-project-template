@@ -91,7 +91,7 @@ param(
     # Пул живёт на сервере, но открывает его человек со своей машины: пикеру там нужны манифест и
     # обёртки со ssh. Скаффолдер кладёт их в <пул>/_windows/ как в выходной лоток, забирает оттуда
     # pull-server-pool.ps1. Второго генератора на той стороне НЕТ намеренно: две копии разъезжаются.
-    [string]   $SshTarget    = 'agents@77.239.103.213',
+    [string]   $SshTarget    = '<user>@<vps-ip>',
     [string]   $SshKey       = 'C:\workspace-root\.launcher\secrets\owner_server',
     [string]   $WindowsRoot  = '',      # где витрина ляжет на рабочей машине; пусто = вывести из пути пула
     [switch]   $Force,
@@ -111,7 +111,7 @@ try { $__isWin = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue; if 
 #   $WorkspaceRoot — где создаётся сам пул. По умолчанию совпадает, но задаётся отдельно.
 # Раньше инструменты были зашиты абсолютом, поэтому -WorkspaceRoot на них не влиял; сохраняем это.
 # На сервере корень выводится от $HOME, а не зашивается: у коллеги другой домашний каталог, и
-# зашитый /home/agents увёл бы его роли в чужое пространство.
+# зашитый <user-home> увёл бы его роли в чужое пространство.
 if (-not $SpaceRoot) { $SpaceRoot = if ($script:OnWindows) { 'C:\workspace-root' } else { Join-Path $HOME 'workspace' } }
 if (-not $WorkspaceRoot) { $WorkspaceRoot = $SpaceRoot }
 
@@ -239,7 +239,7 @@ $ProjectKey = ($Root -replace '[^a-zA-Z0-9]', '-')
 # ⚠️ Уникальность слага проверяется по ДВУМ областям сразу: от корня пространства и от каталога, где
 # пул создаётся. Раньше проверялась только вторая, и вызов с -WorkspaceRoot <подкаталог проекта>
 # сужал гард ДО ЭТОГО ПОДКАТАЛОГА: пулы уровнем выше не виделись вовсе, и об этом ничего не
-# говорилось (боевой прогон компаньона: -WorkspaceRoot ~/workspace/sbs не видел ни <pool-a>, ни
+# говорилось (боевой прогон компаньона: -WorkspaceRoot ~/workspace/<project> не видел ни <pool-a>, ни
 # shop-<organizer-pool>). Слаг — глобальный ключ, по нему пикер и запускает, и ГАСИТ пул.
 # Области СКЛАДЫВАЮТСЯ, а не выбираются: вопрос «лежит ли одно под другим» на Linux не отвечается —
 # Test-PathOverlap сравнивает пути только по обратному слэшу, и любой ответ там был бы выдуман.
@@ -360,7 +360,7 @@ $T_mcp = @'
       "command": "npx",
       "args": [
         "chrome-devtools-mcp@latest",
-        "--user-data-dir=D:\\_workspace\\.chrome-profiles\\${AGENT_OWNER:-_plain}"
+        "--user-data-dir=<workspace-root>\\.chrome-profiles\\${AGENT_OWNER:-_plain}"
       ],
       "env": {}
     }
@@ -1133,8 +1133,8 @@ esac
 export PATH
 
 # Токен подписки пространства (файл режима 600). Не в argv и не в скрипте — только окружением.
-if [ -f "$HOME/.config/agents/env" ]; then
-  set -a; . "$HOME/.config/agents/env"; set +a
+if [ -f "$HOME/.config/claude-pools/env" ]; then
+  set -a; . "$HOME/.config/claude-pools/env"; set +a
 fi
 
 PWSH="$HOME/.local/pwsh/pwsh"
@@ -1453,7 +1453,7 @@ if ($script:OnWindows) {
     # Лежат в _windows/ как в выходном лотке; забирает их pull-server-pool.ps1 с той стороны.
     if (-not $WindowsRoot) {
         # Витрина повторяет положение пула ОТНОСИТЕЛЬНО КОРНЯ ПРОСТРАНСТВА: пул в
-        # ~/workspace/sobesednik/shtab ложится в <workspace-root>\sobesednik\shtab.
+        # ~/workspace/<project>/<pool> ложится в <workspace-root>\<project>\shtab.
         # ⚠️ Только если пул ВНУТРИ пространства. Иначе вычитание длины даёт мусор — поймано
         # прогоном в /tmp: корень витрины вышел «<workspace-root>\ol» (хвост чужого пути).
         $rel = if ($Root.StartsWith($SpaceRoot)) {

@@ -383,7 +383,7 @@
     if (p.role) u.searchParams.set('role', p.role);
     if (ASKED) u.searchParams.set('term', TERM);   // только локальная проба через туннель
     // 🛑 Имя окна должно быть РАЗНЫМ у разных ролей: с ним браузер переиспользует уже открытое
-    // окно. Запрещённые символы заменяем, а не выбрасываем, иначе «team-live/lead» и
+    // окно. Запрещённые символы заменяем, а не выбрасываем, иначе «pool-A/lead» и
     // «teamlive/lead» дают одно имя — вынос второй роли молча увёл бы окно первой.
     const key = [p.kind, p.pool, p.role].join('/');
     const name = 'shopweb_' + key.replace(/[^A-Za-z0-9]/g, c => '_' + c.charCodeAt(0).toString(16));

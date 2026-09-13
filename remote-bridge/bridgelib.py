@@ -1,6 +1,6 @@
 """Общий движок remote-bridge: Telegram <-> живая Claude-сессия (удалённый пульт).
 
-ОДНА копия кода на весь workspace (D:\\_workspace\\.launcher\\pool-bus\\remote-bridge\\),
+ОДНА копия кода на весь workspace (<workspace-root>\\.launcher\\pool-bus\\remote-bridge\\),
 по образцу pool.ps1. Инстанс НЕ задаётся расположением кода — он задаётся окружением
 (REMOTE_BRIDGE_PROJECT_DIR / POOL_BUS_ROOT) или аргументом --project-dir. Инстанс-раскладка:
     <project>/secrets/bot.token

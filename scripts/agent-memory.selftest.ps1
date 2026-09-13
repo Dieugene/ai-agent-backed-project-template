@@ -9,7 +9,19 @@ $ErrorActionPreference = 'Continue'
 
 $env:AGENT_MEMORY = '1'   # roll-out switch on for the unit checks (off is covered in block 7)
 
-$sandbox = Join-Path $env:TEMP ('agent-memory-test-' + (Get-Random))
+# Временный каталог: ДВЕ честные ветки. На Linux `$env:TEMP` ПУСТ, и `Join-Path` с пустым первым
+# аргументом бросает — падают все проверки разом, а симптом читается как «сломана вся логика».
+# 🛑 `[IO.Path]::GetTempPath()` как «общее решение» не годится: на Windows при пустом окружении он
+# тихо даёт `C:\Windows\`, а самотест убирает за собой `Remove-Item -Recurse -Force`.
+# ⚠️ Ветки ПЛАТФОРМЕННЫЕ, а не каскад: каскад на Windows при пустом окружении молча уходит в `/tmp`,
+# то есть в `C:\tmp`, и прогон печатает PASS оттуда.
+$OnWinTmp = $true
+try { $vw = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue; if ($vw) { $OnWinTmp = [bool]$vw.Value } } catch { }
+$TmpBase = if ($OnWinTmp) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { '/tmp' }
+if ([string]::IsNullOrWhiteSpace($TmpBase) -or -not (Test-Path -LiteralPath $TmpBase)) {
+  Write-Host "НЕТ ВРЕМЕННОГО КАТАЛОГА: '$TmpBase' - прогон невозможен"; exit 2
+}
+$sandbox = [IO.Path]::Combine($TmpBase, ('agent-memory-test-' + (Get-Random)))
 $null = New-Item -ItemType Directory -Path $sandbox -Force
 $pass = 0; $fail = 0
 function Check($name, $cond, $detail = '') {
@@ -40,6 +52,9 @@ Check 'settings file has no BOM' (-not ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0x
 $hookCmd = $null
 try { $hookCmd = $j.hooks.PreCompact[0].hooks[0].command } catch { $hookCmd = $null }
 Check 'PreCompact audit hook survived serialization' ($hookCmd -like '*memory-audit.ps1*') "got '$hookCmd'"
+# -Dir обязан нести точный адрес хранилища (18.08): без него скрипты восстанавливают адрес подъёмом
+# по дереву, а подъём берёт первого тёзку и расходится с настройками, где шина и память врозь (qa-div).
+Check 'audit hook carries -Dir with the store address' ($hookCmd -like '*-Dir *' -and $hookCmd -like ('*' + $j.autoMemoryDirectory + '*')) "got '$hookCmd'"
 Check 'hook carries this role and cwd' ($hookCmd -like "*-Owner `"tech-lead`"*" -and $hookCmd -like "*$sandbox*")
 
 # Второй хук - впрыск памяти после сжатия. Лежит на уровень глубже (matcher + hooks), поэтому уплощение
@@ -48,6 +63,7 @@ $injCmd = $null; $injMatch = $null
 try { $injCmd = $j.hooks.SessionStart[0].hooks[0].command; $injMatch = $j.hooks.SessionStart[0].matcher } catch { $injCmd = $null }
 Check 'SessionStart inject hook survived serialization' ($injCmd -like '*memory-inject.ps1*') "got '$injCmd'"
 Check 'inject hook carries this role and cwd' ($injCmd -like "*-Owner `"tech-lead`"*" -and $injCmd -like "*$sandbox*")
+Check 'inject hook carries -Dir with the store address' ($injCmd -like '*-Dir *' -and $injCmd -like ('*' + $j.autoMemoryDirectory + '*')) "got '$injCmd'"
 Check 'inject fires only after compaction' ($injMatch -eq 'compact') "got '$injMatch'"
 
 '--- 3. second role of the SAME cwd gets a DIFFERENT store (the whole point)'
@@ -81,7 +97,7 @@ Check 'refuses unwritable cwd' $threw
 $savedFlag = $script:AgentMemoryGlobalFlag
 $script:AgentMemoryGlobalFlag = 'Z:\no-such-rollout-flag-xyz-42'
 $env:AGENT_MEMORY = ''
-$sb2 = Join-Path $env:TEMP ('agent-memory-off-' + (Get-Random))
+$sb2 = [IO.Path]::Combine($TmpBase, ('agent-memory-off-' + (Get-Random)))
 $null = New-Item -ItemType Directory -Path $sb2 -Force
 $r = Get-AgentMemoryArgs -Owner 'tech-lead' -Cwd $sb2 -Quiet
 Check 'still returns a settings file (the .bat launchers require one)' ($r.Count -eq 2)
@@ -131,7 +147,7 @@ Check 'stats create nothing on disk' (-not (Test-Path (Join-Path $sandbox '.memo
 # Шина живёт В СТОРОНЕ от $sandbox намеренно: у $sandbox уже есть .memory (блок 2), и запасной путь
 # «родитель шины, если рядом видно .memory» честно сработал бы - первый прогон этого теста поймал
 # ровно это. Проверять надо оба пути по отдельности.
-$busHome = Join-Path $env:TEMP ('agent-memory-bus-' + (Get-Random))
+$busHome = [IO.Path]::Combine($TmpBase, ('agent-memory-bus-' + (Get-Random)))
 $bus = Join-Path $busHome '.bus'
 $null = New-Item -ItemType Directory -Path $bus -Force
 Check 'no marker and no .memory next to bus -> null' ($null -eq (Resolve-AgentMemoryCwdForBus -BusRoot $bus))

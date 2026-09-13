@@ -2,14 +2,15 @@
 #  - missing frontmatter (no description => the engine will never surface the record)
 #  - identical bodies shared between roles of one pool (the "common pot was split by copying" smell)
 # Writes a UTF-8 report; console output stays ASCII so PS 5.1 cannot mangle it.
-param([string]$Out)
+param([string]$Out, [string]$Root = $env:POOL_WORKSPACE_ROOT)
 $ErrorActionPreference = 'Stop'
+if (-not $Root -or -not (Test-Path -LiteralPath $Root)) { Write-Host 'workspace root is required: -Root <path> or POOL_WORKSPACE_ROOT' -ForegroundColor Red; exit 2 }
 if (-not $Out) { $Out = Join-Path $env:TEMP 'memory-sweep-report.md' }
 $out = $Out
-$checker = 'C:\workspace-root\.launcher\pool-bus\memory-check.ps1'
+$checker = Join-Path $PSScriptRoot 'memory-check.ps1'
 $rep = New-Object System.Collections.Generic.List[string]
 
-$stores = @(Get-ChildItem -Path 'C:\workspace-root' -Filter 'MEMORY.md' -File -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue |
+$stores = @(Get-ChildItem -Path $Root -Filter 'MEMORY.md' -File -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.DirectoryName -like '*\.memory\*' } | Sort-Object DirectoryName)
 
 $rep.Add('# Аудит хранилищ памяти ролей')

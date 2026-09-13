@@ -14,7 +14,7 @@
         .\set-pool-runtime.ps1 -All
 
         # точечно: одна роль на повышенный уровень
-        .\set-pool-runtime.ps1 -Pool sub-c -Owner extractor-auditors -Effort xhigh
+        .\set-pool-runtime.ps1 -Pool sub-c -Owner extractor-y -Effort xhigh
 
         # весь пул на другую модель
         .\set-pool-runtime.ps1 -Pool pool-b -Model claude-opus-5
@@ -56,8 +56,8 @@ $ORPHANS = @(
     @{ Path = 'C:\workspace-root\umbrella\sub-a\claude-frontend-sub-a.bat';                 Lead = $false; Note = 'sub-a: старый frontend (в манифесте frontend2)' },
     @{ Path = 'C:\workspace-root\umbrella\sub-a\claude-metrics2-sub-a.bat';                 Lead = $false; Note = 'sub-a: fresh-session клон metrics' },
     @{ Path = 'C:\workspace-root\demo-site-replication\claude-dev.bat';                   Lead = $true;  Note = 'demo-site-replication: единственная роль' },
-    @{ Path = 'C:\workspace-root\monorepo\scripts\claude-auditors-dev.bat';        Lead = $false; Note = 'auditors: 1-й экземпляр dev' },
-    @{ Path = 'C:\workspace-root\monorepo\scripts\claude-auditors-tl.bat';         Lead = $true;  Note = 'auditors: 1-й экземпляр лида' },
+    @{ Path = 'C:\workspace-root\monorepo\scripts\claude-y-dev.bat';        Lead = $false; Note = 'auditors: 1-й экземпляр dev' },
+    @{ Path = 'C:\workspace-root\monorepo\scripts\claude-y-tl.bat';         Lead = $true;  Note = 'auditors: 1-й экземпляр лида' },
     @{ Path = 'C:\workspace-root\umbrella\launch-devops.bat';                           Lead = $true;  Note = 'devops-umbrella (из control.json)' }
 )
 

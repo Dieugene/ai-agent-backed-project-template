@@ -26,7 +26,7 @@
 
 | Файл | Роль | Документация |
 |------|------|--------------|
-| `pool.ps1` | Ядро maildir-шины: `send/reply/note/inbox/mine/claim/ack/dismiss/check/watch/hook/activity/board`. Одна общая копия на workspace. | [pool-communication](../docs/pool-communication.md), [wrapper-and-hook-scripts](../docs/wrapper-and-hook-scripts.md) |
+| `pool.ps1` | Ядро maildir-шины: `send/reply/note/inbox/mine/claim/ack/dismiss/close/amend/ready/handoff/check/watch/monitor/hook/activity/armgate/board`; поля обязательств в письмах. Одна общая копия на workspace. | [pool-communication](../docs/pool-communication.md), [wrapper-and-hook-scripts](../docs/wrapper-and-hook-scripts.md) |
 | `ref.ps1` | Инжектор: `& ref.ps1 <topic>` печатает канон-док в контекст. Маршрутная карта topic→файл внутри. | [the-skills-system](../docs/the-skills-system.md) |
 | `launch-pool.ps1` | fzf-пикер пулов → разовый Warp tab-config. Требует `bin\fzf.exe` (скачать отдельно). | [pool-launcher-and-warp](../docs/pool-launcher-and-warp.md) |
 | `control.json.example` | Реестр одиночных управляющих сессий для пикера. Скопируй в `control.json`, впиши свои. | [pool-launcher-and-warp](../docs/pool-launcher-and-warp.md) |
@@ -53,6 +53,8 @@
 | `memory-sweep.ps1` | Обход памяти **всех** ролей workspace: структурная проверка плюс то, чего не видит одиночная — записи без описания и одинаковые тела у разных ролей. | [agent-long-term-memory](../docs/agent-long-term-memory.md) |
 | `memory-check.selftest.ps1` | Самотест структурной проверки памяти. Гоняется на одноразовых каталогах, живую память не читает. | [self-testing-and-false-greens](../docs/self-testing-and-false-greens.md) |
 | `new-pool.selftest.ps1` | Самотест скаффолдера: раскатка **настоящая**, на одноразовом рабочем пространстве — половина дефектов видна только на реальных файлах. | [pool-scaffolding](../docs/pool-scaffolding.md), [self-testing-and-false-greens](../docs/self-testing-and-false-greens.md) |
+| `obligations/` | **Слой осознанных коммуникаций** поверх шины: антифлуд `shop-flood.py` (таймер раз в минуту), обходчик обязательств `shop_oblig.py`, сторож замера, замеры переписки, пробы и мутации. Форма писем и события — в `pool.ps1`. | [agent-messaging](../docs/agent-messaging/README.md), [obligations/README](obligations/README.md) |
+| `memory-revision/` | **Модуль актуализации памяти**: сборщик списка, помощник-вердиктчик (`claude -p --agent memory-verdict`), закрыватель исходов пачкой, подсадные, пробы; определение агента в `agents/`. Зовётся из `memory-audit.ps1` и `pool handoff`. | [memory-actualization](../docs/memory-actualization.md), [memory-revision/README](memory-revision/README.md) |
 
 ## Установка (минимум для одного пула)
 
@@ -76,10 +78,10 @@
 
 | Команда | Ожидаемый результат на **голой** машине |
 |---------|------------------------------------------|
-| `powershell -File selftest.ps1` | `83/83 PASS` — полностью зелёный, окружения не требует |
+| `powershell -File selftest.ps1` | `105/105 PASS` — полностью зелёный, окружения не требует |
 | `powershell -File new-pool.selftest.ps1` | `PASS=52 FAIL=0` |
-| `powershell -File memory-check.selftest.ps1` | `PASS=12 FAIL=0` |
-| `powershell -File agent-memory.selftest.ps1` | `PASS=52 FAIL=1` — одна проверка требует раскатанного рабочего пространства |
+| `powershell -File memory-check.selftest.ps1` | `PASS=43 FAIL=0` |
+| `powershell -File agent-memory.selftest.ps1` | `PASS=54 FAIL=1` — одна проверка требует раскатанного рабочего пространства |
 | `powershell -File launch-pool.ps1 -SelfTest` | зелёный; при отсутствии манифестов список пулов пуст, это норма |
 | `powershell -File pool-shutdown.ps1 -SelfTest` | `92 ok / 10 fail` |
 | `python -m pytest -q` в `../remote-bridge/` | `54 passed` |
